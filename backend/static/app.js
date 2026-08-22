@@ -192,6 +192,7 @@ function completeSteps() {
 }
 
 function resetSteps() {
+  stepIndex = -1;
   STEP_ORDER.forEach((s) => setStep(s, ""));
   ui.barFill.style.width = "6%";
   const label = ui.steps.querySelector('li[data-step="search"] [data-label]');
@@ -217,8 +218,28 @@ function humanMessage(entry) {
       if (dup > 0) return `Found ${rel} relevant results, skipped ${dup} duplicate${dup === 1 ? "" : "s"}.`;
       return `Found ${rel} relevant result${rel === 1 ? "" : "s"}.`;
     }
-    case "thought": return entry.title || "Analyzing what came back…";
-    case "warning": return "One source was unavailable — continuing with the others.";
+    case "thought": {
+      // Pre-search reasoning: the agent explaining what it is deliberately not doing.
+      if (/^holding back/i.test(entry.title || "")) {
+        const held = TOOL_LABEL[d.need ? d.need + "_search" : ""] || SOURCE_LABEL[d.need] || "some sources";
+        return `Skipping ${String(held).toLowerCase()} for now — only worth searching if the evidence calls for it.`;
+      }
+      if (/need is now satisfied/i.test(entry.title || "")) {
+        const which = (entry.title.match(/'([^']+)'/) || [])[1];
+        return `Got enough on ${SOURCE_LABEL[which] ? SOURCE_LABEL[which].toLowerCase() : which || "that"}. Deciding what's next…`;
+      }
+      return entry.title || "Analyzing what came back…";
+    }
+    case "warning": {
+      const t = entry.title || "";
+      // Not every warning is a dead source — say the right thing or stay quiet.
+      if (/llm|reasoner|model/i.test(t)) return "";          // engine note, not user-facing
+      if (/simulation/i.test(t)) return "Using demo data for a fast, offline run.";
+      if (/degraded|provider/i.test(t)) return "One source was unavailable — continuing with the others.";
+      if (/iteration limit/i.test(t)) return "Reached the step limit — summarizing what was found.";
+      if (/unavailable/i.test(t)) return "A tool is unavailable — continuing with the rest.";
+      return "";
+    }
     case "error": return "A source failed. Continuing with the rest.";
     case "final": return "Enough information gathered. Analyzing strategic importance…";
     case "insight": return d.priority_counts ? "Writing your report…" : "Ranking what matters most…";
@@ -232,22 +253,31 @@ function phaseToStep(entry) {
     case "start": case "goal": return "goal";
     case "plan": return "plan";
     case "decision": case "action": case "observation": return "search";
-    case "thought": case "final": return "analyze";
+    // A `thought` before any tool call is still planning. Only post-observation
+    // reasoning counts as analysis — otherwise the tracker jumps to "Analyzing"
+    // before a single search has run, then snaps backwards.
+    case "thought": return entry.iteration ? "search" : "plan";
+    case "final": return "analyze";
     case "insight": case "done": return "insights";
     default: return null;
   }
 }
 
+/* The tracker only ever moves forward. */
+let stepIndex = -1;
+
 function onActivity(entry) {
   const step = phaseToStep(entry);
   if (step) {
-    const label = entry.phase === "action" && entry.data && entry.data.tool
-      ? "Searching " + (TOOL_LABEL[entry.data.tool] || entry.data.tool)
-      : null;
-    advanceTo(step, label);
+    const idx = STEP_ORDER.indexOf(step);
+    if (idx >= stepIndex) {
+      stepIndex = idx;
+      const label = entry.phase === "action" && entry.data && entry.data.tool
+        ? "Searching " + (TOOL_LABEL[entry.data.tool] || entry.data.tool)
+        : null;
+      advanceTo(step, label);
+    }
   }
-  // "thought" entries during search shouldn't drag the tracker backwards.
-  if (entry.phase === "thought" && entry.iteration) advanceTo("search");
 
   const msg = humanMessage(entry);
   if (msg) ui.progressMsg.textContent = msg;
@@ -414,12 +444,13 @@ function renderSummary(result, insights, counts) {
       `We found ${insights.length} relevant development${insights.length === 1 ? "" : "s"}.`;
 
     const rows = [
-      ["HIGH", counts.HIGH, "requires immediate attention"],
-      ["MEDIUM", counts.MEDIUM, "worth monitoring"],
-      ["LOW", counts.LOW, "low priority"],
+      ["HIGH", counts.HIGH, "requires", "require", "immediate attention"],
+      ["MEDIUM", counts.MEDIUM, "is", "are", "worth monitoring"],
+      ["LOW", counts.LOW, "is", "are", "low priority"],
     ].filter(([, n]) => n > 0);
-    ui.summaryCounts.innerHTML = rows.map(([k, n, label]) =>
-      `<li><span class="swatch ${k}"></span>${n} ${esc(label)}</li>`).join("");
+    ui.summaryCounts.innerHTML = rows.map(([k, n, sing, plur, tail]) =>
+      `<li><span class="swatch ${k}"></span>${n} ${esc(n === 1 ? sing : plur)} ${esc(tail)}</li>`
+    ).join("");
 
     const trend = deriveTrend(result, insights);
     ui.summaryTrend.textContent = trend;
@@ -443,15 +474,17 @@ function renderSummary(result, insights, counts) {
 /* One readable sentence about the dominant pattern. */
 function deriveTrend(result, insights) {
   const sig = (result.metrics && result.metrics.signals_detected) || [];
+  // Phrases stay free of "and" so joining two of them never reads
+  // "acquisitions and benchmark and performance claims".
   const PHRASE = {
-    patent: "patent and IP activity",
+    patent: "patent filings",
     launch: "product launches",
-    funding: "funding and investment activity",
-    partnership: "partnership activity",
+    funding: "funding activity",
+    partnership: "partnerships",
     acquisition: "acquisitions",
     regulatory: "regulatory attention",
-    benchmark: "benchmark and performance claims",
-    hiring: "team and hiring moves",
+    benchmark: "performance claims",
+    hiring: "hiring moves",
   };
   const coverage = (result.metrics && result.metrics.coverage) || {};
   const topSource = Object.entries(coverage).sort((a, b) => b[1] - a[1])[0];
