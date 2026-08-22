@@ -228,6 +228,32 @@ def test_17_loop_deadlock_detection():
     assert ProgressMonitor.is_deadlocked(base, "dispatch")[0] is False
 
 
+# ── 18b. Adversarial injection is plan-independent (regression) ──
+def test_18b_adversarial_fires_whatever_the_plan_selects():
+    """The faults must fire regardless of which tools the dynamic plan reaches for.
+
+    Regression: faults were pinned to research_search/web_search, so a plan that
+    selected only the competitive agent never called them and the adversarial run
+    silently degraded to a fault-free run — breaking repeatability.
+    """
+    cases = [
+        dict(goal="Analyze AI agent research and competitor developments",
+             keywords=["AI agents"], competitors=["OpenAI", "Anthropic"]),
+        dict(goal="Monitor OpenAI and Anthropic announcements",
+             competitors=["OpenAI", "Anthropic"]),
+        dict(goal="Track recent research on multi-agent reinforcement learning",
+             keywords=["multi-agent RL"]),
+    ]
+    for kw in cases:
+        r = asyncio.run(run_graph(simulation_mode=True,
+                                  adversarial=AdversarialConfig.full_scenario("OpenAI"), **kw))
+        fw = r["framework"]
+        assert fw["fallback_history"], f"no fallback fired for plan {fw['selected_agents']}"
+        assert len(fw["fallback_history"]) <= 2, "injections must stay within budget"
+        assert fw["replan_count"] >= 1, f"no replan for plan {fw['selected_agents']}"
+        assert r["status"] == "completed"
+
+
 # ── 18. Full adversarial test ────────────────────────────────
 def test_18_full_adversarial_completes_autonomously():
     r = adv_run("full")

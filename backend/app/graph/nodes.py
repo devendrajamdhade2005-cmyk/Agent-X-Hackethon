@@ -673,6 +673,18 @@ def _decide_route(eng: GraphEngine, state: dict, unresolved: list, needs_more: b
         return "verify"
     if needs_more and eng.governor.can_replan(state) and eng.governor.can_afford_tools(state, 1):
         return "replan"
+    # Adversarial demo: replanning is part of what has to be demonstrated, and a run
+    # whose evidence happens to satisfy the evaluator would otherwise skip it. The
+    # trigger is injected; the replan itself is real — the replanner creates a task,
+    # the router re-dispatches it, and an agent executes it.
+    if (
+        eng.adversarial.enabled
+        and eng.adversarial.config.force_replan
+        and int(state.get("replan_count") or 0) == 0
+        and eng.governor.can_replan(state)
+        and eng.governor.can_afford_tools(state, 1)
+    ):
+        return "replan"
     return "finalize"
 
 

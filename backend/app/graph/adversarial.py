@@ -62,6 +62,13 @@ class AdversarialConfig:
     enabled: bool = False
     scenario: str = "custom"
     tool_faults: list[ToolFault] = field(default_factory=list)
+    # Which tools a run actually calls depends on the *dynamic* plan, which is
+    # LLM-influenced and varies between runs. With faults pinned to specific tool
+    # names, a plan that never reaches those tools would silently produce a
+    # fault-free run — and the demo has to be repeatable. When `adaptive` is on, an
+    # unfired fault is applied to whichever tool the run does call, so the
+    # failure → retry → fallback path is always exercised.
+    adaptive: bool = True
     inject_conflict: bool = False
     conflict_subject: str = ""
     conflict_claim_a: str = ""
@@ -76,6 +83,7 @@ class AdversarialConfig:
         return {
             "enabled": self.enabled,
             "scenario": self.scenario,
+            "adaptive": self.adaptive,
             "tool_faults": [f.to_dict() for f in self.tool_faults],
             "inject_conflict": self.inject_conflict,
             "conflict_subject": self.conflict_subject,
@@ -93,6 +101,7 @@ class AdversarialConfig:
         return cls(
             enabled=bool(data.get("enabled", False)),
             scenario=str(data.get("scenario", "custom")),
+            adaptive=bool(data.get("adaptive", True)),
             tool_faults=[
                 ToolFault(
                     tool=f.get("tool", ""),
@@ -175,19 +184,50 @@ class AdversarialController:
         self._recovered: set[str] = set()
         self._conflict_emitted = False
         self._low_conf_emitted = False
+        # Faults already spent, so the total number injected never exceeds what was
+        # configured no matter which tools the dynamic plan reaches for.
+        self._fired = 0
 
     @property
     def enabled(self) -> bool:
         return self.config.enabled
 
+    @property
+    def budget(self) -> int:
+        return len(self.config.tool_faults)
+
     def fault_for(self, tool_name: str) -> ToolFault | None:
-        """Return an unrecovered fault for this tool, or None."""
+        """Return a fault to inject on this tool call, or None.
+
+        Exact tool matches win. Otherwise, when `adaptive` is set and fault budget
+        remains, an unfired configured fault is retargeted onto this tool — that is
+        what makes the demo repeatable across different dynamic plans.
+        """
         if not self.config.enabled or tool_name in self._recovered:
             return None
-        return next((f for f in self.config.tool_faults if f.tool == tool_name), None)
+        # One cap for both paths, so the number of injected faults is exactly what
+        # was configured however the plan turns out.
+        if self._fired >= self.budget:
+            return None
+        exact = next((f for f in self.config.tool_faults if f.tool == tool_name), None)
+        if exact is not None:
+            return exact
+        if not self.config.adaptive:
+            return None
+        # Retarget the next unfired fault, keeping its timeout characteristic and
+        # using this tool's real provider chain for the failure/fallback labels.
+        template = self.config.tool_faults[self._fired]
+        primary, fallback = FALLBACK_PROVIDERS.get(tool_name, ("primary source", "fallback source"))
+        return ToolFault(
+            tool=tool_name,
+            provider=primary,
+            fallback_provider=fallback,
+            timeout=template.timeout,
+        )
 
     def mark_recovered(self, tool_name: str) -> None:
         self._recovered.add(tool_name)
+        self._fired += 1
 
     def take_conflict(self) -> bool:
         if self.config.enabled and self.config.inject_conflict and not self._conflict_emitted:
