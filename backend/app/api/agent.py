@@ -40,6 +40,17 @@ def _remember(result: AgentRunResult) -> None:
         _RUNS.popitem(last=False)
 
 
+def remember_dict(result: dict[str, Any]) -> None:
+    """Store an already-serialised run (e.g. from the LangGraph runtime) so the
+    report builder and run history can read it exactly like a classic run."""
+    run_id = result.get("run_id")
+    if not run_id:
+        return
+    _RUNS[run_id] = result
+    while len(_RUNS) > _MAX_RUNS:
+        _RUNS.popitem(last=False)
+
+
 def get_stored_run(run_id: str) -> dict[str, Any] | None:
     """Read a completed run. Used by the report builder.
 

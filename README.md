@@ -137,8 +137,89 @@ Every finding carries `discovered_by`, so attribution survives into the API, the
 PDF. The activity log is tagged per agent and per event type — `ORCHESTRATION`, `DELEGATION`,
 `TOOL_CALL`, `OBSERVATION`, `COLLABORATION`, `RESULT`, `ERROR` — so you can watch the handoffs live.
 
-Built with **no agent framework**. No LangGraph, no CrewAI: the orchestrator is ~500 readable lines,
-adds zero dependencies, and streams every state transition instead of hiding it.
+The specialised agents and their scoped tools are coordinated by a **LangGraph** `StateGraph`
+runtime — see the next section.
+
+---
+
+## ⚙️ Agent framework — LangGraph (Task 5)
+
+### Why LangGraph
+
+> InsightPulse requires a stateful, adaptive, multi-agent orchestration runtime rather than a
+> fixed pipeline. LangGraph was selected because its `StateGraph` model provides explicit shared
+> state, conditional routing, parallel fan-out, looping workflows, checkpointing/persistence,
+> streaming, and fine-grained control over deterministic and LLM-driven steps. This matches the
+> project's requirements for dynamic planning, autonomous replanning, memory-based reasoning,
+> recovery, and adversarial execution.
+
+LangGraph is the primary orchestration runtime (`app/graph/`). The Task 1–4 components — planner,
+specialist agents, tool registry, source resilience and the memory manager — are **reused
+unchanged**; LangGraph coordinates them, it does not replace them.
+
+### The graph (dynamic, cyclic — not a fixed pipeline)
+
+```
+UNDERSTAND → PLAN → DECOMPOSE → RESOURCE/POLICY → DYNAMIC ROUTER
+                                                     │  (conditional fan-out)
+                        ┌────────────────────────────┼────────────────────┐
+                        ▼                             ▼                     ▼
+                 RESEARCH AGENT              COMPETITIVE AGENT          (observer)
+                   (tools+patent)              (tools+web)
+                        └──────────────┬──────────────┘
+                                       ▼
+                                   OBSERVER ─→ CONFLICT RESOLUTION ─→ SELF-EVALUATOR
+                                                                          │ (conditional)
+                              ┌───────────────────────────────────────────┼─────────┐
+                              ▼                                            ▼         ▼
+                          VERIFY ─→ (back to CONFLICT RESOLUTION)       REPLAN    FINALIZE
+                                                                          │          ▼
+                                                                   (back to ROUTER)  MEMORY UPDATE → END
+```
+
+The next node is chosen from the observed state, evidence, failures, uncertainty and remaining
+budget — never a hard-coded order.
+
+| Capability | How |
+|---|---|
+| **Shared state** | Typed `GraphState` (`state.py`) with order-independent reducers for parallel writes |
+| **Dynamic planning** | Planner + goal-driven agent selection; the plan changes with the goal |
+| **Adaptive decomposition** | Tasks derived from the plan; small goals stay small |
+| **Conditional routing** | `add_conditional_edges` decides verify / replan / finalize from state |
+| **Parallel execution** | Router fans out to independent agents in one superstep (reducers merge results) |
+| **Checkpointing** | Checkpoint after understand / plan / agents / verification / synthesis / memory; resumable by `thread_id` (in-process `MemorySaver`, durable `SqliteSaver`) |
+| **Failure recovery** | Real retry → fallback through the existing resilience layer; failure is data, not a crash |
+| **Conflict resolution** | Contradiction detection → credibility/independence evaluation → resolve or verify |
+| **Uncertainty** | Every claim carries confidence / evidence strength / verification status |
+| **Self-evaluation** | Scores completion, coverage, evidence, confidence; can demand more work |
+| **Autonomous replanning** | Replanner adds/removes tasks from observations; the plan version increments |
+| **Hypothesis verification** | SUPPORTED / PARTIALLY / UNSUPPORTED / INCONCLUSIVE, never asserted as fact |
+| **Resource governance** | Tool/LLM/step/time/cost budgets; low-value work is dropped under pressure |
+| **Loop/deadlock detection** | Progress monitor + hard recursion limit (60) independent of LangGraph's own |
+| **Memory** | Task 4 memory retrieved at start, updated during the run, consolidated at the end |
+
+### Adversarial live test
+
+A deterministic, repeatable adversarial mode (`adversarial.py`) injects controlled faults; the
+graph recovers through the **production** path (nothing about the success is faked):
+
+```
+🎯 Plan created  →  🔬 research tool fails  →  🔄 retry  →  ↩ fallback (arXiv→OpenAlex)
+🏢 competitive source times out  →  ↩ fallback (Tavily→news)  →  ⚠ evidence conflict detected
+🔎 verification task created  →  ✓ independent source consulted  →  💰 budget constraint respected
+↻ plan revised (v2)  →  🧭 self-evaluation  →  ✅ objective completed
+```
+
+Run it from the dashboard **Framework** tab (**🧪 Run Adversarial Test**) or the API:
+
+```bash
+curl -N -X POST http://localhost:8000/api/agent/graph/adversarial \
+  -H 'Content-Type: application/json' \
+  -d '{"goal":"Analyze AI-agent developments and strategic competitive movement",
+       "competitors":["OpenAI","Anthropic"],"simulation_mode":true,"scenario":"full"}'
+```
+
+Scenarios: `full`, `tool_failure`, `conflict`, `budget`.
 
 ---
 
@@ -239,6 +320,10 @@ POST /api/agent/run              run the loop, return the full result
 POST /api/agent/run/stream       same, streaming the activity log (SSE)
 GET  /api/agent/tools            tool catalog + provider health
 GET  /api/agent/runs             recent runs
+POST /api/agent/graph/run        run the LangGraph runtime (Task 5)
+POST /api/agent/graph/run/stream stream the framework events (SSE)
+POST /api/agent/graph/adversarial run the adversarial demo (SSE)
+GET  /api/agent/graph/info       graph topology, for visualisation
 POST /api/report/generate        build a report from a finished run
 GET  /api/report/{id}/preview    print-ready HTML
 GET  /api/report/{id}/download/{pdf|md|json}
@@ -268,6 +353,7 @@ backend/
 │   ├── security.py            input sanitisation, SSRF guard
 │   ├── api/
 │   │   ├── agent.py           run / stream / tools / runs
+│   │   ├── graph.py           LangGraph run / stream / adversarial / info
 │   │   └── report.py          generate / preview / download
 │   ├── agents/
 │   │   ├── agent.py           host: ReAct primitives + run lifecycle
@@ -286,15 +372,23 @@ backend/
 │   │   ├── context_builder.py selective per-agent context packets
 │   │   ├── long_term.py       durable memory + relevance retrieval
 │   │   └── manager.py         lifecycle owner the agents talk to
+│   ├── graph/                 LangGraph runtime (Task 5)
+│   │   ├── state.py           typed shared StateGraph state + reducers
+│   │   ├── nodes.py           understand/plan/agents/observe/evaluate/verify/replan
+│   │   ├── builder.py         StateGraph assembly + checkpointer
+│   │   ├── engine.py          per-run live objects + specialist host shim
+│   │   ├── governor.py        resource governor + loop/deadlock detection
+│   │   ├── adversarial.py     deterministic fault injection
+│   │   └── runner.py          entry point + SSE bridge + result projection
 │   ├── tools/                 5 tools + shared signal detection
 │   ├── sources/               13 providers + retry/breaker/simulation
 │   ├── reports/               builder, HTML, PDF, Markdown
 │   └── services/              activity logger (per-agent, typed events)
 ├── static/                    dashboard (vanilla ES modules, no build step)
-└── tests/                     108 tests
+└── tests/                     129 tests
 ```
 
-**Stack:** Python 3.11+ · FastAPI · httpx · ReportLab · vanilla ES modules + hand-rolled SVG
+**Stack:** Python 3.11+ (tested on 3.14) · FastAPI · LangGraph · httpx · ReportLab · vanilla ES modules + hand-rolled SVG
 charts. No build step, no frontend framework — the page loads instantly and streaming updates
 touch only three DOM nodes.
 
@@ -421,7 +515,7 @@ research tool, so it retries once instead of twice.
 
 ```bash
 cd backend && .venv/bin/python -m pytest tests/ -q
-# 108 passed
+# 129 passed  (111 core + 18 LangGraph framework — tests/test_graph.py)
 ```
 
 Covers goal→plan, dynamic tool selection per goal, observation-driven adaptation, self-termination,
@@ -458,7 +552,7 @@ unchanged.
 | Intelligence dashboard with derived analytics | ✅ |
 | Intelligence Report — PDF / HTML / Markdown / JSON | ✅ |
 | Source provenance auditing | ✅ |
-| 108 automated tests | ✅ |
+| 129 automated tests | ✅ |
 | Public deployment | ❌ not yet — runs locally |
 | Scheduled autonomous re-runs | ❌ out of scope for the current tasks |
 | Multi-user accounts / persistence | ❌ runs are held in memory |

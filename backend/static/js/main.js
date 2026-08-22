@@ -20,9 +20,10 @@ import * as cards from "./intelligence/cards.js";
 import * as agentUI from "./agent/activity.js";
 import { renderMultiAgent } from "./agent/multiagent.js";
 import { renderMemory } from "./agent/memory.js";
+import { initFramework } from "./agent/framework.js";
 import { closeDrawer, openDrawer } from "./drawers/detailDrawer.js";
 
-const VIEWS = ["overview", "research", "competitors", "patents", "news", "insights", "reports"];
+const VIEWS = ["overview", "research", "competitors", "patents", "news", "insights", "framework", "reports"];
 const rendered = new Set();
 let controller = null;
 let trackerIndex = -1;
@@ -204,6 +205,15 @@ function switchView(view) {
   qsa("[data-nav]").forEach((b) =>
     b.classList.toggle("is-on", b.dataset.nav === view));
   qsa("[data-view]").forEach((sec) => { sec.hidden = sec.dataset.view !== view; });
+
+  // The framework view is self-driving (it launches its own LangGraph runs), so it
+  // must work before any classic scan has happened. Every [data-view] section lives
+  // inside #dash, which stays hidden until a scan finishes — so reveal it here, or
+  // un-hiding the section alone would still leave the whole subtree display:none.
+  if (view === "framework") {
+    show($("dash"), true);
+    initFramework($("framework-body"));
+  }
 
   renderView(view);
   window.scrollTo({ top: 0, behavior: "smooth" });

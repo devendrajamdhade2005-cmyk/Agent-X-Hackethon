@@ -1,0 +1,100 @@
+"""Graph assembly — where the StateGraph is wired and compiled.
+
+The topology encodes the dynamic behaviour:
+
+    understand → plan → decompose → resource_check → dispatch
+                                                       │ (conditional fan-out)
+                        ┌──────────────────────────────┼───────────────┐
+                        ▼                               ▼               ▼
+                 research_agent                 competitive_agent   (observer)
+                        └───────────────┬───────────────┘
+                                        ▼
+                                    observer → conflict_resolution → self_evaluator
+                                                                          │ (conditional)
+                                      ┌───────────────────────────────────┼──────────┐
+                                      ▼                                    ▼          ▼
+                                   verify                               replan     finalize
+                                      │                                    │          │
+                             conflict_resolution                    (conditional)     ▼
+                                      ▲                             dispatch │      memory_update → END
+                                      └──────── self_evaluator ◀────────────┘
+
+`dispatch` fans out (a list return from the router) to whichever agents have
+pending tasks; `self_evaluator` routes to verify / replan / finalize from the
+observed state; `verify` loops back through conflict resolution; `replan` loops
+back through the router. Every loop is bounded by the resource governor, the
+progress monitor and the compiled `recursion_limit`.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from langgraph.graph import END, START, StateGraph
+
+from . import nodes
+from .state import GraphState
+
+# Hard step ceiling in addition to the governor and progress monitor (section 24).
+RECURSION_LIMIT = 60
+
+
+def build_graph(checkpointer: Any | None = None, *, interrupt_before: list[str] | None = None):
+    """Construct and compile the InsightPulse agent graph.
+
+    `interrupt_before` pauses the graph before the named nodes (used to demonstrate
+    and test checkpoint interruption + resume)."""
+    g = StateGraph(GraphState)
+
+    g.add_node("understand", nodes.understand_node)
+    g.add_node("plan", nodes.plan_node)
+    g.add_node("decompose", nodes.decompose_node)
+    g.add_node("resource_check", nodes.resource_check_node)
+    g.add_node("dispatch", nodes.dispatch_node)
+    g.add_node("research_agent", nodes.research_agent_node)
+    g.add_node("competitive_agent", nodes.competitive_agent_node)
+    g.add_node("observer", nodes.observer_node)
+    g.add_node("conflict_resolution", nodes.conflict_resolution_node)
+    g.add_node("self_evaluator", nodes.self_evaluator_node)
+    g.add_node("verify", nodes.verify_node)
+    g.add_node("replan", nodes.replan_node)
+    g.add_node("finalize", nodes.finalize_node)
+    g.add_node("memory_update", nodes.memory_update_node)
+
+    g.add_edge(START, "understand")
+    g.add_edge("understand", "plan")
+    g.add_edge("plan", "decompose")
+    g.add_edge("decompose", "resource_check")
+    g.add_edge("resource_check", "dispatch")
+
+    # Dynamic fan-out to the specialists (parallel) or straight to the observer.
+    g.add_conditional_edges(
+        "dispatch",
+        nodes.route_after_dispatch,
+        ["research_agent", "competitive_agent", "observer"],
+    )
+    g.add_edge("research_agent", "observer")
+    g.add_edge("competitive_agent", "observer")
+
+    g.add_edge("observer", "conflict_resolution")
+    g.add_edge("conflict_resolution", "self_evaluator")
+
+    # The dynamic decision: verify, replan, or finalize.
+    g.add_conditional_edges(
+        "self_evaluator",
+        nodes.route_after_eval,
+        {"verify": "verify", "replan": "replan", "finalize": "finalize"},
+    )
+    # Verify loops back through conflict resolution (re-check with new evidence).
+    g.add_edge("verify", "conflict_resolution")
+    # Replan loops back through the router, or gives up and finalises.
+    g.add_conditional_edges(
+        "replan",
+        nodes.route_after_replan,
+        {"dispatch": "dispatch", "finalize": "finalize"},
+    )
+
+    g.add_edge("finalize", "memory_update")
+    g.add_edge("memory_update", END)
+
+    return g.compile(checkpointer=checkpointer, interrupt_before=interrupt_before or [])

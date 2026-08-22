@@ -4,6 +4,12 @@ uvicorn[standard]>=0.30
 pydantic>=2.7
 pydantic-settings>=2.3
 
+# ── agent framework (Task 5) ────────────────────────────────
+# LangGraph is the primary orchestration runtime: StateGraph shared state,
+# conditional routing, parallel fan-out, checkpointing and resumable threads.
+langgraph>=1.0
+langgraph-checkpoint-sqlite>=2.0   # durable SQLite checkpointer + async saver
+
 # ── source connectors ───────────────────────────────────────
 httpx>=0.27            # every provider + the Gemini REST calls
 feedparser>=6.0        # curated RSS parsing
