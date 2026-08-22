@@ -407,7 +407,7 @@ backend/
 │   ├── reports/               builder, HTML, PDF, Markdown
 │   └── services/              activity logger (per-agent, typed events)
 ├── static/                    dashboard (vanilla ES modules, no build step)
-└── tests/                     150 tests
+└── tests/                     158 tests
 ```
 
 **Stack:** Python 3.11+ (tested on 3.14) · FastAPI · LangGraph · httpx · ReportLab · vanilla ES modules + hand-rolled SVG
@@ -559,8 +559,13 @@ suite aggregation → regression history → report export
 
 11 cases (`EVAL-001`…`EVAL-011`) covering all seven scenario classes: **NORMAL** (5),
 **AMBIGUOUS**, **ADVERSARIAL**, **CONTRADICTORY**, **INCOMPLETE**, **TOOL_FAILURE**,
-**UNSUPPORTED_CONCLUSION**. The suite runs in deterministic simulation mode so repeated
-evaluation is stable and offline.
+**UNSUPPORTED_CONCLUSION**. The demo suite includes one case per class, so a single run
+populates every row of the scenario matrix. The suite runs in deterministic simulation mode
+so repeated evaluation is stable and offline.
+
+Repeated runs share a stable `case_id` and differ only by `repeat_index`, each keeping its own
+`evaluation_run_id`. Reliability and consistency are grouped by `case_id` — grouping by run id
+would place every repetition in its own bucket and make both metrics unmeasurable.
 
 Ground truth is **structural and checkable** (entities that must be covered, source
 categories that must be reached, subtasks that must be performed), not invented real-world
@@ -638,7 +643,7 @@ Modes: `demo`, `full`, `adversarial`, `single`, `repeated`, `scenario`.
 
 ```bash
 cd backend && .venv/bin/python -m pytest tests/ -q
-# 150 passed  (111 core + 19 LangGraph framework + 20 evaluation)
+# 158 passed  (111 core + 19 LangGraph framework + 28 evaluation)
 ```
 
 Covers goal→plan, dynamic tool selection per goal, observation-driven adaptation, self-termination,
@@ -675,7 +680,7 @@ unchanged.
 | Intelligence dashboard with derived analytics | ✅ |
 | Intelligence Report — PDF / HTML / Markdown / JSON | ✅ |
 | Source provenance auditing | ✅ |
-| 150 automated tests | ✅ |
+| 158 automated tests | ✅ |
 | Public deployment | ❌ not yet — runs locally |
 | Scheduled autonomous re-runs | ❌ out of scope for the current tasks |
 | Multi-user accounts / persistence | ❌ runs are held in memory |

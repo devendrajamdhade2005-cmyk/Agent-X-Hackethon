@@ -172,9 +172,15 @@ function cards() {
     const b = baselineRows[key];
     let cmp = "";
     if (b && b.available && typeof b.difference === "number" && b.direction !== "equal") {
+      // Two independent signals, and conflating them is what made a latency
+      // *improvement* render as an up arrow:
+      //   arrow  = which way the number actually moved (sign of the difference)
+      //   colour = whether that movement is good (direction from the metric's
+      //            declared higher_is_better, never inferred from the sign)
       const good = b.direction === "better";
+      const arrow = b.difference < 0 ? "↓" : "↑";
       const delta = isMs ? `${Math.abs(Math.round(b.difference))}ms` : `${Math.abs(b.difference * 100).toFixed(1)}%`;
-      cmp = `<span class="ev-delta ${good ? "up" : "down"}">${good ? "↑" : "↓"} ${delta} vs baseline</span>`;
+      cmp = `<span class="ev-delta ${good ? "up" : "down"}" title="${good ? "better" : "worse"} than baseline">${arrow} ${delta} vs baseline</span>`;
     }
     const r = reg[key];
     let trend = "";
@@ -197,18 +203,28 @@ function cards() {
     <div class="ev-cards">${items}</div>`;
 }
 
-/** Reliability/consistency live on the suite, not the per-metric aggregate. */
+/** Last-resort lookup for a metric absent from the aggregate.
+ *
+ * Reliability and consistency are now rolled into the suite aggregate by the
+ * runner, so this only covers a suite stored before that change: it reads the
+ * per-case blocks (keyed by case_id) and averages the measured ones.
+ */
 function aggregateFallback(key) {
   if (key !== "consistency" && key !== "reliability") return null;
-  const runs = state.runs || [];
-  void runs;
-  // Pull the first measured value from the suite-level blocks, if present.
   const block = key === "consistency" ? state.metrics?.consistency : state.metrics?.reliability;
-  if (!block) {
-    return { available: false, unavailable_reason: "requires a repeated-run case" };
+  const measured = Object.entries(block || {})
+    .filter(([, v]) => v && typeof v === "object" && v.available && typeof v.value === "number");
+  if (!measured.length) {
+    return {
+      available: false,
+      unavailable_reason: "no case in this suite was repeated, so this cannot be measured",
+    };
   }
-  const first = Object.values(block).find((v) => v && typeof v === "object" && v.available);
-  return first || { available: false, unavailable_reason: "requires a repeated-run case" };
+  const mean = measured.reduce((a, [, v]) => a + v.value, 0) / measured.length;
+  return {
+    available: true, value: mean, unit: "ratio", higher_is_better: true,
+    details: { cases_measured: measured.map(([k]) => k) },
+  };
 }
 
 function firstBaselineRows() {

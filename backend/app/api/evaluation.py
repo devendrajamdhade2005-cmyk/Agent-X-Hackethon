@@ -138,6 +138,10 @@ async def get_metrics() -> dict[str, Any]:
         "latest_suite_id": (latest or {}).get("suite_id"),
         "scenario_matrix": (latest or {}).get("scenario_matrix") or {},
         "counts": (latest or {}).get("counts") or {},
+        # Per-case repeated-run detail, keyed by case_id. The suite-level figures are
+        # already in `latest`; these expose which case contributed and its run counts.
+        "reliability": (latest or {}).get("reliability") or {},
+        "consistency": (latest or {}).get("consistency") or {},
         "has_data": bool(latest),
         "empty_state": None if latest else "No evaluation has been run yet. Run the evaluation suite.",
     }

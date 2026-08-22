@@ -125,7 +125,7 @@ class SuiteRunner:
                     gate_failures=eval_run.gate_failures,
                 )
 
-        # ── reliability + consistency (repeated cases) ──
+        # ── reliability + consistency (grouped by stable case_id) ──
         suite.reliability = self._reliability(eval_by_case)
         suite.consistency = self._consistency(raw_by_case)
 
@@ -154,6 +154,18 @@ class SuiteRunner:
 
         robustness = RobustnessEvaluator().evaluate(suite.scenario_matrix)
         suite.aggregate["robustness"] = robustness.to_dict()
+        # Reliability and consistency are per-case (they need repetitions), so they are
+        # rolled up into the suite aggregate here. Without this they existed only in
+        # the per-case blocks and never reached the metric cards, which is why the
+        # dashboard reported them as unavailable even though they had been measured.
+        suite.aggregate[M.RELIABILITY] = self._rollup(
+            M.RELIABILITY, suite.reliability,
+            "no case in this suite was repeated, so repeatability cannot be measured",
+        )
+        suite.aggregate[M.CONSISTENCY] = self._rollup(
+            M.CONSISTENCY, suite.consistency,
+            "no case in this suite was repeated, so run-to-run agreement cannot be measured",
+        )
         if robustness.available:
             suite.aggregate["overall_score"] = self._overall(suite.aggregate)
 
@@ -253,12 +265,43 @@ class SuiteRunner:
             out[name] = entry
         return out
 
+    def _rollup(self, name: str, per_case: dict[str, Any], empty_reason: str) -> dict[str, Any]:
+        """Aggregate a per-case metric block (keyed by case_id) into one metric.
+
+        The block holds one `MetricResult` dict per repeated case. The mean across
+        cases is the suite figure; the per-case detail is kept so the report can show
+        which case contributed what.
+        """
+        spec = M.spec(name)
+        entries = {
+            case_id: entry for case_id, entry in (per_case or {}).items()
+            if isinstance(entry, dict) and entry.get("available")
+            and isinstance(entry.get("value"), (int, float))
+        }
+        if not entries:
+            return spec.unavailable(empty_reason).to_dict()
+        values = [float(e["value"]) for e in entries.values()]
+        details: dict[str, Any] = {
+            "cases_measured": sorted(entries),
+            "per_case": {cid: e.get("value") for cid, e in entries.items()},
+        }
+        # Surface the run counts the reliability evaluator recorded, so the dashboard
+        # can show successful/partial/failed without another request.
+        for case_id, entry in entries.items():
+            d = entry.get("details") or {}
+            for key in ("total_runs", "successful_runs", "partial_runs", "failed_runs",
+                        "mean_time_to_completion_ms", "repetitions", "pairs_compared"):
+                if key in d:
+                    details.setdefault(key, d[key])
+            details.setdefault("primary_case", case_id)
+        return spec.result(M.mean_of(values), details=details).to_dict()
+
     def _overall(self, aggregate: dict[str, Any]) -> float | None:
         """Single headline score: mean of quality metrics, with lower-is-better
         metrics inverted so the direction is consistent."""
         parts: list[float] = []
         for name in (M.ACCURACY, M.TASK_COMPLETION, M.EVIDENCE_QUALITY, M.GROUNDEDNESS,
-                     M.UNCERTAINTY_HANDLING, "robustness"):
+                     M.UNCERTAINTY_HANDLING, M.RELIABILITY, M.CONSISTENCY, "robustness"):
             m = aggregate.get(name) or {}
             if m.get("available") and isinstance(m.get("value"), (int, float)):
                 parts.append(float(m["value"]))
@@ -347,6 +390,25 @@ class SuiteRunner:
                 b_vals = _values(runs, name)
                 i_vals = _values(ours, name)
                 b_reason = _first_unavailable_reason(runs, name)
+
+                # A baseline that could not run at all did not score badly — it did
+                # not score. Its output-derived metrics collapse to zero because there
+                # is no output, and comparing against that would manufacture an
+                # improvement. So when the baseline is blocked, nothing is comparable.
+                if blocked_reasons:
+                    rows.append({
+                        "metric": name, "label": spec.label, "unit": spec.unit,
+                        "higher_is_better": spec.higher_is_better,
+                        "baseline": None, "insightpulse": M.mean_of(i_vals),
+                        "difference": None, "relative_improvement": None,
+                        "direction": "not_comparable", "available": False,
+                        "unavailable_reason": (
+                            f"baseline unavailable — {'; '.join(blocked_reasons)}; "
+                            f"a system that produced no output cannot be scored"
+                        ),
+                    })
+                    continue
+
                 row: dict[str, Any] = {
                     "metric": name,
                     "label": spec.label,

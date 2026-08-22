@@ -340,14 +340,18 @@ def demo_suite() -> list[EvaluationCase]:
 
     One case per required scenario class, plus the repeated-run case.
     """
+    # One case per required scenario class, so the demo suite alone populates every
+    # row of the scenario matrix. INCOMPLETE was previously missing, which left that
+    # category showing "not run" on the dashboard.
     wanted = [
         "EVAL-001",  # normal
         "EVAL-005",  # ambiguous
+        "EVAL-006",  # incomplete
         "EVAL-008",  # contradictory
         "EVAL-009",  # tool failure
         "EVAL-007",  # unsupported conclusion
         "EVAL-010",  # adversarial
-        "EVAL-011",  # repeated
+        "EVAL-011",  # repeated (reliability + consistency)
     ]
     return [c for cid in wanted if (c := _BY_ID.get(cid)) is not None]
 

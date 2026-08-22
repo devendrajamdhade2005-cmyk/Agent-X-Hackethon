@@ -455,6 +455,215 @@ def test_18_uncertainty_and_suite_aggregation():
     assert rob.details["weakest_category"] == "ADVERSARIAL"
 
 
+# ═════════════════════════════════════════════════════════════
+# Regression tests for the Task 6 fix round
+# ═════════════════════════════════════════════════════════════
+def test_21_repeated_runs_group_by_stable_case_id():
+    """Repetitions must share case_id and differ only by repeat_index.
+
+    Regression: reliability/consistency depend on grouping by the stable case
+    identifier. Grouping by evaluation_run_id (unique per execution) would put every
+    repetition in its own bucket and make both metrics permanently unmeasurable.
+    """
+    store.reset()
+    suite = asyncio.run(
+        SuiteRunner(simulation_mode=True).run_repeated("EVAL-011", repeats=3)
+    )
+    mine = [r for r in suite["runs"] if r["system"] == "insightpulse"]
+    assert len(mine) == 3
+    assert {r["case_id"] for r in mine} == {"EVAL-011"}, "one stable case_id"
+    assert sorted(r["repeat_index"] for r in mine) == [0, 1, 2]
+    # Each execution keeps its own identity.
+    assert len({r["evaluation_run_id"] for r in mine}) == 3
+    assert len({r["agent_run_id"] for r in mine}) == 3
+
+
+def test_22_consistency_is_measured_from_repeated_runs():
+    """Regression: consistency was computed per case but never rolled into the
+    suite aggregate, so the dashboard read it as unavailable."""
+    store.reset()
+    suite = asyncio.run(
+        SuiteRunner(simulation_mode=True).run_repeated("EVAL-011", repeats=3)
+    )
+    entry = suite["aggregate"][M.CONSISTENCY]
+    assert entry["available"] is True, "consistency must not be n/a with 3 repetitions"
+    assert 0.0 <= entry["value"] <= 1.0
+    assert entry["details"]["cases_measured"] == ["EVAL-011"]
+    assert entry["details"]["repetitions"] == 3
+    assert entry["details"]["pairs_compared"] == 3
+    # Per-case block is retained alongside the rollup.
+    assert suite["consistency"]["EVAL-011"]["available"] is True
+
+
+def test_23_reliability_is_measured_from_repeated_runs():
+    store.reset()
+    suite = asyncio.run(
+        SuiteRunner(simulation_mode=True).run_repeated("EVAL-011", repeats=3)
+    )
+    entry = suite["aggregate"][M.RELIABILITY]
+    assert entry["available"] is True, "reliability must not be n/a with 3 repetitions"
+    d = entry["details"]
+    assert d["total_runs"] == 3
+    assert d["successful_runs"] + d["partial_runs"] + d["failed_runs"] == 3
+    # Formula is successful / total, not task completion.
+    assert abs(entry["value"] - d["successful_runs"] / d["total_runs"]) < 1e-4
+
+    # A suite with no repetition reports it as unmeasurable, not as zero.
+    store.reset()
+    single = asyncio.run(
+        SuiteRunner(simulation_mode=True).run_suite(
+            mode="single", case_ids=["EVAL-001"], include_baseline=False
+        )
+    )
+    rel = single["aggregate"][M.RELIABILITY]
+    assert rel["available"] is False and rel["value"] is None
+    assert "repeated" in rel["unavailable_reason"]
+
+
+def test_24_incomplete_scenario_is_executed_by_the_demo_suite():
+    """Regression: the demo suite omitted the INCOMPLETE case, so that row of the
+    scenario matrix showed 'not run'."""
+    ids = [c.case_id for c in dataset.demo_suite()]
+    scenarios = {c.scenario_type for c in dataset.demo_suite()}
+    assert "EVAL-006" in ids
+    # Every required scenario class is present in the demo suite itself.
+    assert {"NORMAL", "AMBIGUOUS", "ADVERSARIAL", "CONTRADICTORY", "INCOMPLETE",
+            "TOOL_FAILURE", "UNSUPPORTED_CONCLUSION"} <= scenarios
+
+    case = dataset.get_case("EVAL-006")
+    ev, raw = asyncio.run(EvaluationEngine().evaluate_case(case, simulation_mode=True))
+    assert ev.status == "completed", "the incomplete case must actually execute"
+    assert ev.outcome in {"PASS", "PARTIAL", "FAIL"}, "a real measured outcome"
+    assert ev.agent_run_id, "measured against a real agent run"
+    # It must not be marked passed without evidence: the subtask checks are recorded.
+    checks = ev.metrics[M.TASK_COMPLETION]["details"]["checks"]
+    assert any("missing subject" in c["subtask"] for c in checks)
+
+
+def test_25_blocked_baseline_is_not_comparable():
+    """A baseline that produced nothing must not yield a flattering comparison."""
+    store.reset()
+    suite = asyncio.run(
+        SuiteRunner(simulation_mode=True).run_suite(
+            mode="single", case_ids=["EVAL-001"], include_baseline=True,
+            baseline_systems=["baseline_llm"],
+        )
+    )
+    comp = suite["baseline_comparison"]["baseline_llm"]
+    if comp["blocked"]:
+        assert comp["blocked_reason"], "the real failure reason is recorded"
+        assert all(r["direction"] == "not_comparable" for r in comp["rows"])
+        assert all(r["available"] is False for r in comp["rows"])
+        assert all(r["baseline"] is None for r in comp["rows"]), "no fake zero scores"
+        assert all(r["difference"] is None for r in comp["rows"]), \
+            "no percentage difference against an unavailable system"
+    else:
+        # Provider available: real values, and every row still declares direction.
+        assert any(r["available"] for r in comp["rows"])
+
+
+def test_26_lower_is_better_comparison_direction():
+    """Direction must come from the metric's declared semantics, never the sign."""
+    runner = SuiteRunner(simulation_mode=True)
+    primary = [{
+        "system": "insightpulse", "case_id": "C1",
+        "metrics": {
+            M.LATENCY: {"available": True, "value": 400.0},
+            M.HALLUCINATION_RATE: {"available": True, "value": 0.05},
+            M.GROUNDEDNESS: {"available": True, "value": 0.95},
+        },
+    }]
+    baseline = [{
+        "system": "baseline_pipeline", "case_id": "C1", "provenance": {},
+        "metrics": {
+            M.LATENCY: {"available": True, "value": 650.0},
+            M.HALLUCINATION_RATE: {"available": True, "value": 0.20},
+            M.GROUNDEDNESS: {"available": True, "value": 0.80},
+        },
+    }]
+    rows = {
+        r["metric"]: r
+        for r in runner._baseline_comparison(primary, baseline)["baseline_pipeline"]["rows"]  # noqa: SLF001
+    }
+    # Lower latency than baseline is an improvement, even though the difference is negative.
+    assert rows[M.LATENCY]["difference"] == -250.0
+    assert rows[M.LATENCY]["direction"] == "better"
+    assert rows[M.LATENCY]["higher_is_better"] is False
+    # Lower hallucination is likewise better despite a negative difference.
+    assert rows[M.HALLUCINATION_RATE]["difference"] < 0
+    assert rows[M.HALLUCINATION_RATE]["direction"] == "better"
+    # Higher groundedness is better with a positive difference.
+    assert rows[M.GROUNDEDNESS]["difference"] > 0
+    assert rows[M.GROUNDEDNESS]["direction"] == "better"
+
+    # And the inverse: slower than baseline must read as worse.
+    slower = [{
+        "system": "insightpulse", "case_id": "C1",
+        "metrics": {M.LATENCY: {"available": True, "value": 900.0}},
+    }]
+    row = next(
+        r for r in runner._baseline_comparison(slower, baseline)["baseline_pipeline"]["rows"]  # noqa: SLF001
+        if r["metric"] == M.LATENCY
+    )
+    assert row["difference"] > 0 and row["direction"] == "worse"
+
+
+def test_27_human_review_persists_and_updates_the_queue():
+    store.reset()
+    suite = asyncio.run(
+        SuiteRunner(simulation_mode=True).run_suite(
+            mode="single", case_ids=["EVAL-001"], include_baseline=False
+        )
+    )
+    rid = next(r["evaluation_run_id"] for r in suite["runs"] if r["system"] == "insightpulse")
+
+    before = human.pending_and_completed(store.latest_suite())
+    assert any(p["evaluation_run_id"] == rid for p in before["pending"])
+    assert not before["completed"]
+
+    human.submit(HumanEvaluation(
+        evaluation_run_id=rid, reviewer_id="verifier",
+        accuracy_score=4, completion_score=5, evidence_score=3,
+        groundedness_score=4, uncertainty_score=4, actionability_score=4,
+        overall_score=4, decision="PASS", comment="verified during the fix round",
+    ))
+
+    after = human.pending_and_completed(store.latest_suite())
+    assert any(c["evaluation_run_id"] == rid for c in after["completed"])
+    assert not any(p["evaluation_run_id"] == rid for p in after["pending"])
+    assert len(after["completed"]) == len(before["completed"]) + 1
+    assert len(after["pending"]) == len(before["pending"]) - 1
+
+    agg = human.aggregate(rid)
+    assert agg["reviewer_count"] == 1
+    assert agg["comments"][0]["comment"] == "verified during the fix round"
+    # The stored score survives a fresh read of the store.
+    assert store.human_reviews(rid)[0]["overall_score"] == 4
+    assert store.human_review_count() == 1
+
+
+def test_28_scenario_coverage_aggregation():
+    store.reset()
+    suite = asyncio.run(
+        SuiteRunner(simulation_mode=True).run_suite(mode="demo", include_baseline=False)
+    )
+    matrix = suite["scenario_matrix"]
+    executed = {k for k, v in matrix.items() if v["total"]}
+    # Every required class is exercised, INCOMPLETE included.
+    assert executed == set(dataset.SCENARIO_TYPES), f"missing: {set(dataset.SCENARIO_TYPES) - executed}"
+    for name, bucket in matrix.items():
+        total = bucket["total"]
+        assert bucket["passed"] + bucket["partial"] + bucket["failed"] + bucket["error"] == total
+        if total:
+            expected = (bucket["passed"] + 0.5 * bucket["partial"]) / total
+            assert abs(bucket["score"] - expected) < 1e-4, f"{name} score mismatch"
+    # Robustness is the unweighted mean, so a weak category is not hidden.
+    rob = suite["aggregate"]["robustness"]
+    assert rob["available"] is True
+    scores = [v["score"] for v in matrix.values() if v["total"]]
+    assert abs(rob["value"] - sum(scores) / len(scores)) < 1e-3
+
+
 # ── extra: report export in every format ────────────────────
 def test_20_report_export_formats():
     from app.evaluation.reports import (

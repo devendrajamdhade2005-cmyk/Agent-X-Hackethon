@@ -55,6 +55,13 @@ def _slim(suite: dict[str, Any]) -> dict[str, Any]:
         "counts": suite.get("counts") or {},
         "scenario_matrix": suite.get("scenario_matrix") or {},
         "baseline_comparison": suite.get("baseline_comparison") or {},
+        # Per-case repeated-run detail is small and worth keeping: without it the
+        # reliability/consistency breakdown (which case, how many runs) is lost on
+        # restart even though the aggregate figure survives.
+        "reliability": suite.get("reliability") or {},
+        "consistency": suite.get("consistency") or {},
+        "regression": suite.get("regression") or {},
+        "thresholds": suite.get("thresholds") or {},
         "provenance": suite.get("provenance") or {},
     }
 
