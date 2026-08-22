@@ -164,6 +164,7 @@ def render_pdf(report: dict[str, Any]) -> bytes:
     _exec(flow, report, s, width)
     _insights(flow, report, s, width)
     _agents(flow, report, s, width)
+    _memory(flow, report, s, width)
     _execution(flow, report, s, width)
     _findings(flow, report, s, width)
     _sources(flow, report, s, width)
@@ -499,9 +500,145 @@ def _agents(flow: list[Any], r: dict, s: dict, width: float) -> None:
             "; ".join(revisions[1:]), s, width))
 
 
+def _memory(flow: list[Any], r: dict, s: dict, width: float) -> None:
+    """04 — Context & Memory."""
+    cm = r.get("context_memory") or {}
+    if not cm.get("available"):
+        return
+
+    tc = cm.get("task_context") or {}
+    w = cm.get("working") or {}
+    change = cm.get("change") or {}
+    cons = cm.get("consolidation") or {}
+
+    _heading(flow, "04", "Context & Memory", s, width)
+    flow.append(Paragraph(
+        f"Working memory reached version <b>{_t(w.get('version'))}</b> across "
+        f"{_t(w.get('updates'))} update(s), retaining {_t(w.get('fact_count'))} fact(s) "
+        f"of which {_t(w.get('important_fact_count'))} were important. Task context was "
+        f"extracted by the {_t(tc.get('author'))} reader.", s["body"]))
+    flow.append(Spacer(1, 9))
+
+    basis = ["Current intelligence gathered in this run"]
+    if cm.get("used_historical_context"):
+        basis.append("Relevant historical context retrieved from previous monitoring")
+    flow.append(_callout("THIS REPORT IS BASED ON", "; ".join(basis), s, width))
+    flow.append(Spacer(1, 9))
+
+    # Task context
+    bits = [f"<b>Topics:</b> {_t(', '.join(tc.get('topics') or []) or 'none detected')}"]
+    if tc.get("competitors"):
+        bits.append(f"<b>Tracked companies:</b> {_t(', '.join(tc['competitors']))}")
+    if tc.get("domains"):
+        bits.append(f"<b>Domains:</b> {_t(', '.join(tc['domains']))}")
+    bits.append(f"<b>Time scope:</b> {_t(tc.get('time_scope'))}")
+    if tc.get("constraints"):
+        bits.append(f"<b>Constraints:</b> {_t('; '.join(tc['constraints']))}")
+    if tc.get("continuation"):
+        bits.append("<b>Continuation</b> of earlier monitoring")
+    flow.append(Paragraph("TASK CONTEXT", s["label"]))
+    for bit in bits:
+        flow.append(Paragraph(bit, s["small"]))
+    flow.append(Spacer(1, 8))
+
+    # Plan state
+    steps = cm.get("plan_steps") or []
+    if steps:
+        flow.append(Paragraph("EXECUTION PLAN STATE", s["label"]))
+        rows = [["Step", "Status", "Result"]]
+        for step in steps:
+            rows.append([
+                _t(step.get("name")),
+                _t(str(step.get("status", "")).replace("_", " ").upper()),
+                _t(step.get("reference") or "—"),
+            ])
+        table = Table(rows, colWidths=[width * 0.46, width * 0.22, width * 0.32])
+        table.setStyle(TableStyle([
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("TEXTCOLOR", (0, 0), (-1, 0), INK3),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.5, LINE),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ]))
+        flow.append(table)
+        flow.append(Spacer(1, 9))
+
+    # Cross-agent context sharing — the core evidence for this section.
+    shared = cm.get("shared_context") or []
+    if shared:
+        flow.append(Paragraph("CONTEXT SHARED BETWEEN AGENTS", s["label"]))
+        for sh in shared:
+            flow.append(Paragraph(
+                f"<b>{_t(sh.get('agent'))}</b> received {_t(sh.get('facts'))} finding(s) "
+                f"from {_t(', '.join(sh.get('from') or []))}.", s["small"]))
+            flow.append(Paragraph(
+                f"Context: {_t(', '.join(sh.get('received') or []))}", s["meta"]))
+            if sh.get("focus"):
+                flow.append(Paragraph(
+                    f"Search focus carried over: {_t(', '.join(sh['focus']))}", s["meta"]))
+            for why in sh.get("withheld") or []:
+                flow.append(Paragraph(f"Withheld: {_t(why)}", s["meta"]))
+            flow.append(Spacer(1, 4))
+        flow.append(Spacer(1, 5))
+
+    # Retained facts
+    facts = cm.get("retained_facts") or []
+    if facts:
+        flow.append(Paragraph("FINDINGS RETAINED IN WORKING MEMORY", s["label"]))
+        for fact in facts[:6]:
+            sim = " · SIMULATED" if fact.get("simulated") else ""
+            flow.append(Paragraph(
+                f"[{_t(fact.get('importance'))}] {_t(fact.get('text'))}", s["small"]))
+            flow.append(Paragraph(f"{_t(fact.get('agent'))}{sim}", s["meta"]))
+        flow.append(Spacer(1, 9))
+
+    # Long-term memory
+    flow.append(Paragraph("LONG-TERM MEMORY", s["label"]))
+    retrieved = cm.get("retrieved") or []
+    if retrieved:
+        for m in retrieved:
+            rel = f" · relevance {_t(m.get('relevance'))}" if m.get("relevance") else ""
+            flow.append(Paragraph(
+                f"<b>{_t(m.get('type'))}</b> — {_t(m.get('summary'))}", s["small"]))
+            flow.append(Paragraph(f"from run {_t(m.get('from_run'))}{rel}", s["meta"]))
+    else:
+        flow.append(Paragraph(
+            f"No relevant previous context was found for this goal "
+            f"({_t(cm.get('retrieval_status'))}). This report is based on current "
+            f"intelligence only.", s["small"]))
+    flow.append(Spacer(1, 6))
+
+    if change.get("compared"):
+        flow.append(Paragraph(
+            f"<b>Detected change:</b> {_t(change.get('verdict'))} — "
+            f"{_t(change.get('detail'))}", s["small"]))
+    else:
+        flow.append(Paragraph(
+            "No historical baseline was available, so no change comparison was made.",
+            s["small"]))
+
+    line = (f"Consolidated {_t(cons.get('stored', 0))} new item(s) for future monitoring")
+    if cons.get("refreshed"):
+        line += f", refreshed {_t(cons.get('refreshed'))}"
+    if cons.get("rejected"):
+        line += f", rejected {_t(cons.get('rejected'))} as not durable"
+    line += "."
+    if cm.get("store_total") is not None:
+        line += f" Store holds {_t(cm.get('store_total'))} item(s)."
+    flow.append(Paragraph(line, s["meta"]))
+
+    if w.get("compressions"):
+        flow.append(Paragraph(
+            f"Context compression ran {_t(w.get('compressions'))} time(s), folding "
+            f"{_t(w.get('compressed_count'))} lower-importance fact(s) into a summary "
+            f"while keeping important facts verbatim.", s["meta"]))
+
+
 def _execution(flow: list[Any], r: dict, s: dict, width: float) -> None:
     ex = r.get("execution_summary") or {}
-    _heading(flow, "04", "Agent Execution Summary", s, width)
+    _heading(flow, "05", "Agent Execution Summary", s, width)
 
     loop = Table([[Paragraph(_t(ex.get("loop")), s["loop"])]], colWidths=[width])
     loop.setStyle(TableStyle([
@@ -558,7 +695,7 @@ def _findings(flow: list[Any], r: dict, s: dict, width: float) -> None:
     groups = r.get("findings_by_category") or []
     if not groups:
         return
-    _heading(flow, "05", "Detailed Findings", s, width)
+    _heading(flow, "06", "Detailed Findings", s, width)
     flow.append(Paragraph(
         "Every item the agent collected, grouped by source category.", s["sub"]))
 
@@ -602,7 +739,7 @@ def _findings(flow: list[Any], r: dict, s: dict, width: float) -> None:
 
 def _sources(flow: list[Any], r: dict, s: dict, width: float) -> None:
     src = r.get("sources") or {}
-    _heading(flow, "06", "Sources & Coverage", s, width)
+    _heading(flow, "07", "Sources & Coverage", s, width)
 
     def col(title: str, lines: list[str]) -> list[Any]:
         out: list[Any] = [Paragraph(title, s["label"]), Spacer(1, 3)]
@@ -698,7 +835,7 @@ def _caveats(flow: list[Any], r: dict, s: dict, width: float) -> None:
     caveats = r.get("caveats") or []
     if not caveats:
         return
-    _heading(flow, "07", "Limitations & Caveats", s, width)
+    _heading(flow, "08", "Limitations & Caveats", s, width)
     for c in caveats:
         block = Table(
             [[[Paragraph(f'<b>{_t(c.get("title"))}</b>', s["body"]),

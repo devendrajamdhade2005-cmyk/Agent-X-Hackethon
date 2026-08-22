@@ -51,6 +51,7 @@ def render_html(report: dict[str, Any], *, embedded: bool = False) -> str:
   {_exec_summary(report, stats)}
   {_insights(report)}
   {_agents(report)}
+  {_memory(report)}
   {_execution(report)}
   {_findings(report)}
   {_sources(report)}
@@ -302,6 +303,166 @@ def _agents(report: dict[str, Any]) -> str:
 </section>"""
 
 
+def _memory(report: dict[str, Any]) -> str:
+    """04 — Context & Memory.
+
+    Built imperatively rather than as one large f-string: every claim here is
+    conditional on something having actually happened, and nested conditionals
+    inside a template are where "3 memories retrieved" appears on a run that
+    retrieved none.
+    """
+    cm = report.get("context_memory") or {}
+    if not cm.get("available"):
+        return ""
+
+    tc = cm.get("task_context") or {}
+    w = cm.get("working") or {}
+    change = cm.get("change") or {}
+    cons = cm.get("consolidation") or {}
+
+    # What the narrative is allowed to claim it drew on.
+    basis = ["Current intelligence gathered in this run"]
+    if cm.get("used_historical_context"):
+        basis.append("Relevant historical context retrieved from previous monitoring")
+    basis_html = "".join(f"<li>{_e(b)}</li>" for b in basis)
+
+    chips = "".join(
+        f'<span class="memchip">{_e(v)}</span>'
+        for v in [*tc.get("topics", []), *tc.get("competitors", []), *tc.get("domains", [])]
+    ) or '<span class="memnone">no explicit topic detected</span>'
+
+    scope_bits = [f"Time scope: {_e(tc.get('time_scope'))}"]
+    if tc.get("constraints"):
+        scope_bits.append("Constraints: " + _e("; ".join(tc["constraints"])))
+    if tc.get("continuation"):
+        scope_bits.append("continuation of earlier monitoring")
+    scope = " · ".join(scope_bits)
+
+    steps = []
+    for step in cm.get("plan_steps") or []:
+        ref = f" ({_e(step.get('reference'))})" if step.get("reference") else ""
+        status = _e((step.get("status") or "").replace("_", " "))
+        steps.append(f"<li><b>{_e(step.get('name'))}</b> — {status}{ref}</li>")
+    steps_html = "".join(steps)
+
+    shared = []
+    for sh in cm.get("shared_context") or []:
+        parts = [
+            f"<b>{_e(sh.get('icon'))} {_e(sh.get('agent'))}</b> received "
+            f"{_e(sh.get('facts'))} finding(s) from {_e(', '.join(sh.get('from') or []))}.",
+            f"<span class=\"memsub\">Context: {_e(', '.join(sh.get('received') or []))}</span>",
+        ]
+        if sh.get("focus"):
+            parts.append(
+                "<span class=\"memsub\">Search focus carried over: "
+                f"{_e(', '.join(sh['focus']))}</span>"
+            )
+        for why in sh.get("withheld") or []:
+            parts.append(f'<span class="memomit">Withheld: {_e(why)}</span>')
+        shared.append("<li>" + "".join(parts) + "</li>")
+    shared_html = ""
+    if shared:
+        shared_html = (
+            '<div class="planbox"><span class="metalabel">Context shared between agents'
+            '</span><ul class="memlist">' + "".join(shared) + "</ul></div>"
+        )
+
+    facts = []
+    for fact in cm.get("retained_facts") or []:
+        sim = " · SIMULATED" if fact.get("simulated") else ""
+        facts.append(
+            f'<li><span class="memimp">{_e(fact.get("importance"))}</span> '
+            f'{_e(fact.get("text"))}'
+            f'<span class="memsub">{_e(fact.get("agent"))}{sim}</span></li>'
+        )
+    facts_html = ""
+    if facts:
+        facts_html = (
+            '<div class="planbox"><span class="metalabel">Findings retained in working '
+            'memory</span><ul class="memlist">' + "".join(facts) + "</ul></div>"
+        )
+
+    retrieved = cm.get("retrieved") or []
+    if retrieved:
+        rows = []
+        for m in retrieved:
+            rel = f" · relevance {_e(m.get('relevance'))}" if m.get("relevance") else ""
+            rows.append(
+                f'<li><span class="memtype">{_e(m.get("type"))}</span> '
+                f'{_e(m.get("summary"))}'
+                f'<span class="memsub">from run {_e(m.get("from_run"))}{rel}</span></li>'
+            )
+        retrieved_html = '<ul class="memlist">' + "".join(rows) + "</ul>"
+    else:
+        retrieved_html = (
+            '<p class="memnone">No relevant previous context was found for this goal '
+            f'({_e(cm.get("retrieval_status"))}). This report is based on current '
+            "intelligence only.</p>"
+        )
+
+    if change.get("compared"):
+        change_html = (
+            f'<p class="memchange"><b>Detected change:</b> {_e(change.get("verdict"))} — '
+            f'{_e(change.get("detail"))}</p>'
+        )
+    else:
+        change_html = (
+            '<p class="memnone">No historical baseline was available, so no change '
+            "comparison was made.</p>"
+        )
+
+    cons_bits = [f"Consolidated {_e(cons.get('stored', 0))} new item(s) for future monitoring"]
+    if cons.get("refreshed"):
+        cons_bits.append(f"refreshed {_e(cons.get('refreshed'))}")
+    if cons.get("rejected"):
+        cons_bits.append(f"rejected {_e(cons.get('rejected'))} as not durable")
+    cons_line = ", ".join(cons_bits) + "."
+    if cm.get("store_total") is not None:
+        cons_line += f" Store holds {_e(cm.get('store_total'))} item(s)."
+
+    compression_html = ""
+    if w.get("compressions"):
+        compression_html = (
+            f'<p class="memsub">Context compression ran {_e(w.get("compressions"))} time(s), '
+            f'folding {_e(w.get("compressed_count"))} lower-importance fact(s) into a summary '
+            "while keeping important facts verbatim.</p>"
+        )
+
+    return f"""<section class="sec">
+  <h2><span class="num">04</span> Context &amp; Memory</h2>
+  <p class="sub">
+    Working memory reached version {_e(w.get('version'))} across {_e(w.get('updates'))}
+    update(s), retaining {_e(w.get('fact_count'))} fact(s) of which
+    {_e(w.get('important_fact_count'))} were important. Task context was extracted by the
+    {_e(tc.get('author'))} reader.
+  </p>
+  <div class="planbox">
+    <span class="metalabel">This report is based on</span>
+    <ul class="planlist">{basis_html}</ul>
+  </div>
+  <div class="memgrid">
+    <div>
+      <span class="metalabel">Task context</span>
+      <div class="memchips">{chips}</div>
+      <p class="memsub">{scope}</p>
+    </div>
+    <div>
+      <span class="metalabel">Execution plan state</span>
+      <ul class="memlist">{steps_html}</ul>
+    </div>
+  </div>
+  {shared_html}
+  {facts_html}
+  <div class="collabbox">
+    <span class="metalabel">Long-term memory</span>
+    {retrieved_html}
+    {change_html}
+    <p class="memsub">{cons_line}</p>
+  </div>
+  {compression_html}
+</section>"""
+
+
 def _shorten_text(text: str, n: int) -> str:
     t = str(text or "")
     return t if len(t) <= n else t[: n - 1] + "…"
@@ -333,7 +494,7 @@ def _execution(report: dict[str, Any]) -> str:
     )
 
     return f"""<section class="sec">
-  <h2><span class="num">04</span> Agent Execution Summary</h2>
+  <h2><span class="num">05</span> Agent Execution Summary</h2>
   <p class="loop">{_e(ex.get('loop'))}</p>
   <div class="exwrap">
     <ol class="trail">{rows}</ol>
@@ -383,7 +544,7 @@ def _findings(report: dict[str, Any]) -> str:
 </div>""")
 
     return f"""<section class="sec">
-  <h2><span class="num">05</span> Detailed Findings</h2>
+  <h2><span class="num">06</span> Detailed Findings</h2>
   <p class="sub">Every item the agent collected and judged relevant, grouped by source category.</p>
   {"".join(blocks)}
 </section>"""
@@ -456,7 +617,7 @@ def _sources(report: dict[str, Any]) -> str:
           <ul>{items}</ul></div>"""
 
     return f"""<section class="sec">
-  <h2><span class="num">06</span> Sources &amp; Coverage</h2>
+  <h2><span class="num">07</span> Sources &amp; Coverage</h2>
   <p class="sub">Every provider queried, who operates it, the exact endpoint used, and the
      real publication domains the findings came from.</p>
 
@@ -481,7 +642,7 @@ def _caveats(report: dict[str, Any]) -> str:
         for c in caveats
     )
     return f"""<section class="sec">
-  <h2><span class="num">07</span> Limitations &amp; Caveats</h2>
+  <h2><span class="num">08</span> Limitations &amp; Caveats</h2>
   {items}
 </section>"""
 
@@ -650,6 +811,17 @@ a{color:var(--accent);word-break:break-word}
 .fsrc{width:34%;padding-left:14px !important;font-size:8.8pt;text-align:right}
 
 /* agent contributions */
+.memgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:10px 0}
+.memchips{display:flex;flex-wrap:wrap;gap:5px;margin:6px 0}
+.memchip{font-size:9.5pt;font-weight:600;padding:2px 7px;border:1px solid #d8dbe6;border-radius:9px}
+.memlist{margin:6px 0 0;padding-left:16px}
+.memlist li{font-size:9.5pt;margin-bottom:5px;line-height:1.45}
+.memsub{display:block;font-size:8.5pt;color:#6b7280;margin-top:2px}
+.memomit{display:block;font-size:8.5pt;color:#9aa1ad;margin-top:2px}
+.memtype{font-size:8pt;font-weight:700;text-transform:uppercase;color:#8b5cf6;margin-right:5px}
+.memimp{font-size:8pt;font-weight:700;color:#0f9b6c;margin-right:5px}
+.memnone{font-size:9.5pt;color:#6b7280;margin:6px 0}
+.memchange{font-size:9.5pt;margin:8px 0 0}
 .planbox{background:var(--line2);border-radius:8px;padding:12px 14px;margin-bottom:14px}
 .planlist{list-style:none;margin:6px 0 0;padding:0}
 .planlist li{padding:6px 0;border-bottom:1px solid var(--line);font-size:9.4pt}

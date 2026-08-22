@@ -65,12 +65,23 @@ class GooglePatentsConnector(SourceConnector):
             params={
                 "engine": "google_patents",
                 "q": query,
-                "num": min(q.limit, 20),
+                # google_patents rejects `num` outside 10..100 with HTTP 400.
+                # The agent often asks for fewer than 10, so the floor matters;
+                # the caller trims the surplus.
+                "num": max(10, min(q.limit, 100)),
                 "after": f"publication:{min(since, floor).strftime('%Y%m%d')}",
                 "api_key": self.api_key,
             },
+            # SerpAPI serves "no results" as HTTP 400 with an explanatory body,
+            # so the status guard has to stand aside for us to read it.
+            tolerate_status=(400,),
         )
-        payload = resp.json()
+        try:
+            payload = resp.json()
+        except ValueError as exc:
+            raise SourceError(
+                f"unparseable response ({resp.status_code})", retryable=False
+            ) from exc
         if payload.get("error"):
             detail = str(payload["error"])
             if self._EMPTY_MARKER in detail.lower():

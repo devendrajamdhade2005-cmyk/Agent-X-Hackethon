@@ -126,6 +126,10 @@ class RunResponse(BaseModel):
     execution_plan: list[dict[str, Any]] = Field(default_factory=list)
     agents: list[dict[str, Any]] = Field(default_factory=list)
     collaboration_events: list[dict[str, Any]] = Field(default_factory=list)
+    # Context & memory surface. Declared explicitly because `response_model`
+    # filters anything it does not know about — an undeclared field is silently
+    # dropped from the response even though the agent produced it.
+    memory: dict[str, Any] = Field(default_factory=dict)
 
 
 # ─────────────────────────────────────────────────────────────

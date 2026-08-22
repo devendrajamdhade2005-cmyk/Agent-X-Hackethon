@@ -130,10 +130,81 @@ def render_markdown(report: dict[str, Any]) -> str:
                 L.append(f"- {r0}")
             L.append("")
 
-    # 04
+    # 04 — context & memory
+    cm = report.get("context_memory") or {}
+    if cm.get("available"):
+        tc = cm.get("task_context") or {}
+        w = cm.get("working") or {}
+        change = cm.get("change") or {}
+        cons = cm.get("consolidation") or {}
+        L += ["---", "", "## 04 · Context & Memory", "",
+              f"Working memory reached version **{w.get('version', 0)}** across "
+              f"{w.get('updates', 0)} update(s), retaining {w.get('fact_count', 0)} fact(s) "
+              f"of which {w.get('important_fact_count', 0)} were important.", "",
+              "**This report is based on**", ""]
+        L.append("- Current intelligence gathered in this run")
+        if cm.get("used_historical_context"):
+            L.append("- Relevant historical context retrieved from previous monitoring")
+        L += ["", "### Task context", ""]
+        L += [f"- **Topics:** {', '.join(tc.get('topics') or []) or 'none detected'}"]
+        if tc.get("competitors"):
+            L.append(f"- **Tracked companies:** {', '.join(tc['competitors'])}")
+        if tc.get("domains"):
+            L.append(f"- **Intelligence domains:** {', '.join(tc['domains'])}")
+        L.append(f"- **Time scope:** {tc.get('time_scope', 'unspecified')}")
+        if tc.get("constraints"):
+            L.append(f"- **Constraints:** {'; '.join(tc['constraints'])}")
+        if tc.get("continuation"):
+            L.append("- **Continuation** of earlier monitoring")
+        L += ["", "### Execution plan state", ""]
+        for step in cm.get("plan_steps") or []:
+            ref = f" — {step.get('reference')}" if step.get("reference") else ""
+            L.append(f"- **{step.get('name')}**: {str(step.get('status','')).replace('_',' ')}{ref}")
+        if cm.get("shared_context"):
+            L += ["", "### Context shared between agents", ""]
+            for sh in cm["shared_context"]:
+                L.append(
+                    f"- {sh.get('icon','')} **{sh.get('agent')}** received "
+                    f"{sh.get('facts', 0)} finding(s) from {', '.join(sh.get('from') or [])}  "
+                )
+                L.append(f"  Context: {', '.join(sh.get('received') or [])}")
+                if sh.get("focus"):
+                    L.append(f"  Search focus carried over: {', '.join(sh['focus'])}")
+                for why in sh.get("withheld") or []:
+                    L.append(f"  _Withheld: {why}_")
+        if cm.get("retained_facts"):
+            L += ["", "### Findings retained in working memory", ""]
+            for fact in cm["retained_facts"]:
+                sim = " · SIMULATED" if fact.get("simulated") else ""
+                L.append(f"- **[{fact.get('importance')}]** {fact.get('text')}  \n  "
+                         f"_{fact.get('agent')}{sim}_")
+        L += ["", "### Long-term memory", ""]
+        if cm.get("retrieved"):
+            for m0 in cm["retrieved"]:
+                rel = f" · relevance {m0.get('relevance')}" if m0.get("relevance") else ""
+                L.append(f"- **{m0.get('type')}** — {m0.get('summary')}  \n  "
+                         f"_from run {m0.get('from_run')}{rel}_")
+        else:
+            L.append(f"_No relevant previous context was found for this goal "
+                     f"({cm.get('retrieval_status')}). This report is based on current "
+                     f"intelligence only._")
+        L.append("")
+        if change.get("compared"):
+            L.append(f"**Detected change:** {change.get('verdict')} — {change.get('detail')}")
+        else:
+            L.append("_No historical baseline was available, so no change comparison "
+                     "was made._")
+        L += ["", f"Consolidated **{cons.get('stored', 0)}** new item(s) for future "
+                  f"monitoring; store holds {cm.get('store_total', 0)} item(s).", ""]
+        if w.get("compressions"):
+            L += [f"Context compression ran {w['compressions']} time(s), folding "
+                  f"{w.get('compressed_count', 0)} lower-importance fact(s) into a summary "
+                  f"while keeping important facts verbatim.", ""]
+
+    # 05
     ex = report.get("execution_summary") or {}
     m = ex.get("metrics") or {}
-    L += ["---", "", "## 04 · Agent Execution Summary", "", f"`{ex.get('loop')}`", ""]
+    L += ["---", "", "## 05 · Agent Execution Summary", "", f"`{ex.get('loop')}`", ""]
     L += [
         "| Metric | Value |", "|---|---|",
         f"| Iterations | {m.get('iterations', 0)} of {m.get('max_iterations', 0)} |",
@@ -152,10 +223,10 @@ def render_markdown(report: dict[str, Any]) -> str:
                  + (f"  \n   {step.get('detail')}" if step.get("detail") else ""))
     L.append("")
 
-    # 04
+    # 06
     groups = report.get("findings_by_category") or []
     if groups:
-        L += ["---", "", "## 05 · Detailed Findings", ""]
+        L += ["---", "", "## 06 · Detailed Findings", ""]
         for g in groups:
             L += [f"### {g.get('label')} ({g.get('count')} finding(s))", ""]
             for f in g.get("items", []):
@@ -174,9 +245,9 @@ def render_markdown(report: dict[str, Any]) -> str:
                 L.append(line)
             L.append("")
 
-    # 05
+    # 07
     src = report.get("sources") or {}
-    L += ["---", "", "## 06 · Sources & Coverage", "",
+    L += ["---", "", "## 07 · Sources & Coverage", "",
           "Every provider queried, who operates it, the endpoint used, and the real "
           "publication domains the findings came from.", "",
           "| Provider | Status | Operator | Access | Endpoint | Findings | Domains harvested |",
@@ -204,9 +275,9 @@ def render_markdown(report: dict[str, Any]) -> str:
             L.append(f"- {d.get('provider')} — {d.get('reason')}")
     L.append("")
 
-    # 06
+    # 08
     if report.get("caveats"):
-        L += ["---", "", "## 07 · Limitations & Caveats", ""]
+        L += ["---", "", "## 08 · Limitations & Caveats", ""]
         for c in report["caveats"]:
             L += [f"**{c.get('title')}**  \n{c.get('body')}", ""]
 

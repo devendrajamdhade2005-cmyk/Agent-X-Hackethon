@@ -291,6 +291,12 @@ class AgentState:
     collaboration_events: list[dict[str, Any]] = field(default_factory=list)
     corroborated_finding_ids: set[str] = field(default_factory=set)
 
+    # ── context & memory ────────────────────────────────────
+    # Short-term memory for this run. Held on the state so dedup, scoring, the
+    # activity log and memory all stay single-sourced; `MemoryManager` owns the
+    # writes. Optional so a bare AgentState() is still valid for tests.
+    memory: Any | None = None
+
     # ── bookkeeping ─────────────────────────────────────────
     seen_finding_ids: set[str] = field(default_factory=set)
     seen_title_keys: set[str] = field(default_factory=set)
@@ -412,6 +418,7 @@ class AgentState:
             "agent_messages": self.agent_messages,
             "agent_reports": self.agent_reports,
             "collaboration_events": self.collaboration_events,
+            "memory": self.memory.public() if self.memory is not None else None,
             "detected_signals": sorted(self.detected_signals),
             "errors": [e.to_dict() for e in self.errors],
             "final_decision": self.final_decision,

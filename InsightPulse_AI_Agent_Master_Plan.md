@@ -10,14 +10,15 @@
 > | This plan says | What was actually built |
 > |---|---|
 > | PulseGraph state-machine engine | A ReAct loop in `app/agents/agent.py` driven by a policy in `decision_engine.py` |
+> | Memory layer: embeddings + vector store + 3-stage dedup | **`app/memory/`**: task context, working memory with versioning and compression, selective per-agent context construction, and a JSON-persisted long-term store with relevance retrieval — no vector DB, no new dependency |
 > | Single agent | **Multi-agent**: an orchestrator delegates to a Research Agent and a Competitive Agent with disjoint tool scopes, then consolidates (`app/agents/orchestrator.py`, `specialists.py`) — added in Task 3 |
 > | Claude (Anthropic) reasoning | **Google Gemini** primary, Anthropic optional, deterministic reasoner as fallback |
 > | Tracking Profiles, PostgreSQL, vector store, scheduler, alerts, digests, auth | **Not built.** Runs are held in memory; there is no database, scheduler or multi-user layer |
 > | Next.js + Tailwind + Recharts frontend | Vanilla ES modules with hand-rolled SVG charts, served by FastAPI — no build step |
-> | 5 source types | **5 tools over 12 providers**, including a live-web tool (Tavily) added in Task 2 and NewsData.io added later |
+> | 5 source types | **5 tools over 13 providers**, including a live-web tool (Tavily) added in Task 2 and NewsData.io added later |
 > | Digest generator | **Intelligence Report** — PDF / HTML / Markdown / JSON, with source provenance auditing |
 >
-> The agentic requirements in §3 and §4 *were* delivered, and are covered by 72 automated tests.
+> The agentic requirements in §3 and §4 *were* delivered, and are covered by 108 automated tests.
 
 *Single reference document: requirements, architecture, agent design, sources, and full feature specs — from hackathon MVP to real product.*
 

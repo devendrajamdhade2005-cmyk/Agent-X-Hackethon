@@ -92,7 +92,7 @@ example, live web search is held back until one of these happens:
 | **Goal** | Natural-language tracking goal → structured information needs | `app/agents/planner.py` |
 | **Planning** | Declares *what must be learned*, marks needs required vs. conditional | `app/agents/planner.py` |
 | **Reasoning** | Scores relevance, novelty and strategic significance; writes the justification | `app/agents/decision_engine.py` |
-| **Tools** | 5 tools over 12 providers, behind one interface with retry + circuit breaker | `app/tools/`, `app/sources/` |
+| **Tools** | 5 tools over 13 providers, behind one interface with retry + circuit breaker | `app/tools/`, `app/sources/` |
 | **Memory** | Per-run dedup (URL identity → normalized-title fingerprint), coverage and signal tracking | `app/agents/state.py` |
 | **Action** | Prioritized insights, executive summary, downloadable intelligence report | `app/agents/insight_generator.py`, `app/reports/` |
 
@@ -147,7 +147,7 @@ adds zero dependencies, and streams every state transition instead of hiding it.
 | Tool | Providers | When the agent picks it |
 |---|---|---|
 | **Research Search** | arXiv, OpenAlex, Semantic Scholar | Scientific/technical progress, new methods, benchmarks |
-| **Patent Search** | PatentsView (USPTO), Google Patents | IP posture; competitor-owned filings are flagged |
+| **Patent Search** | Google Patents (SerpApi), PatentsView (USPTO) | IP posture; competitor-owned filings are flagged |
 | **Industry News** | Curated RSS (tier-1), Hacker News, NewsAPI, NewsData.io, GNews | Market context, launches, funding |
 | **Competitor Intelligence** | RSS, Hacker News, GitHub, Reddit, NewsAPI, NewsData.io, GNews | Named-company activity, per company |
 | **Live Web Intelligence** | Tavily | Current announcements the curated feeds miss |
@@ -156,12 +156,15 @@ adds zero dependencies, and streams every state transition instead of hiding it.
 
 `arXiv` · `OpenAlex` · `curated RSS` · `Hacker News` · `GitHub`
 
+A `GITHUB_TOKEN` is optional but lifts GitHub from 60 to 5,000 requests/hour.
+
 ### Needs a free key (otherwise clearly labelled `SIMULATED`)
 
 | Key | Get it free | Unlocks |
 |---|---|---|
-| `PATENTSVIEW_API_KEY` | [patentsview.org/apis/keyrequest](https://patentsview.org/apis/keyrequest) | Real USPTO patent data |
-| `SEMANTIC_SCHOLAR_API_KEY` | [semanticscholar.org/product/api](https://www.semanticscholar.org/product/api#api-key-form) | Citation counts, venues, institutions |
+| `SERPAPI_KEY` | [serpapi.com](https://serpapi.com) | Real Google Patents data (free plan: 250 searches/month) |
+| `PATENTSVIEW_API_KEY` | [patentsview.org/apis/keyrequest](https://patentsview.org/apis/keyrequest) | Adds USPTO grants alongside Google Patents |
+| `SEMANTIC_SCHOLAR_API_KEY` | [semanticscholar.org/product/api](https://www.semanticscholar.org/product/api#api-key-form) | Citation counts, venues, institutions (keyless access is 429-throttled) |
 | `TAVILY_API_KEY` | [app.tavily.com](https://app.tavily.com) | Live open-web search |
 | `NEWSAPI_KEY` | [newsapi.org/register](https://newsapi.org/register) | Broad news coverage (~1 month of history on the free plan) |
 | `NEWSDATA_API_KEY` | [newsdata.io/register](https://newsdata.io/register) | Global news across ~80k sources, 200+ countries |
@@ -277,17 +280,115 @@ backend/
 │   │   ├── llm.py             Gemini/Anthropic + deterministic fallback
 │   │   ├── sanitize.py        prompt-injection defence
 │   │   └── state.py           shared agent state
+│   ├── memory/
+│   │   ├── task_context.py    UNDERSTAND — structured reading of the goal
+│   │   ├── working.py         short-term memory, versioning, compression
+│   │   ├── context_builder.py selective per-agent context packets
+│   │   ├── long_term.py       durable memory + relevance retrieval
+│   │   └── manager.py         lifecycle owner the agents talk to
 │   ├── tools/                 5 tools + shared signal detection
-│   ├── sources/               12 providers + retry/breaker/simulation
+│   ├── sources/               13 providers + retry/breaker/simulation
 │   ├── reports/               builder, HTML, PDF, Markdown
 │   └── services/              activity logger (per-agent, typed events)
 ├── static/                    dashboard (vanilla ES modules, no build step)
-└── tests/                     72 tests
+└── tests/                     108 tests
 ```
 
 **Stack:** Python 3.11+ · FastAPI · httpx · ReportLab · vanilla ES modules + hand-rolled SVG
 charts. No build step, no frontend framework — the page loads instantly and streaming updates
 touch only three DOM nodes.
+
+---
+
+## 🧠 Context & memory
+
+Three layers, deliberately separated (`app/memory/`):
+
+| Layer | Lifetime | What it holds |
+|---|---|---|
+| **TaskContext** | one run | the structured reading of the goal: topics, research focus, competitors, entities, requested domains, time scope, constraints, continuation |
+| **WorkingMemory** | one run | goal + plan state + the findings that mattered + decisions + coverage gaps + open questions, with a version counter |
+| **LongTermStore** | across runs | what earned persistence, retrieved by relevance when a later run looks related |
+
+```
+USER GOAL
+  → UNDERSTAND        task context extracted
+  → RETRIEVE          relevant long-term memory (or an honest "none found")
+  → PLAN              execution plan stored as tracked steps
+  → DELEGATE          agent receives context built for *it*
+  → USE TOOLS         real intelligence gathered
+  → MEMORY UPDATE     important findings retained, version bumped
+  → ORCHESTRATOR      reads updated memory, decides what happens next
+  → FOLLOW-UP         relevant context shared with the next agent
+  → CROSS-ANALYSIS    combined evidence, compared with baseline if one exists
+  → CONSOLIDATE       select what deserves to outlive the run
+```
+
+**Context sharing is selective.** `ContextBuilder` assembles a packet per (agent,
+objective) rather than handing everyone the run history. The Research Agent gets research
+framing; the Competitive Agent gets tracked companies *plus the specific research findings
+with competitive bearing*. Every packet records what was withheld and why, and the UI
+renders that record — so the per-agent "context received" list is derived from the real
+construction, not hardcoded.
+
+**Shared context changes behaviour.** Terms drawn from the shared findings are passed into
+the receiving agent's `DecisionEngine` as search focus, so a follow-up query is shaped by
+what an earlier agent found rather than repeating the original goal. A run where the
+Research Agent surfaced *Helios Dynamics* sends the Competitive Agent looking for
+`['Helios Dynamics', 'multi-agent AI']`.
+
+**An observation can create work.** When the Research Agent finds evidence with commercial
+bearing — a named company, or a launch/funding/acquisition/partnership signal — it flags
+`potential_competitive_relevance`. That flag is *stored in working memory*; the orchestrator
+reads it back and decides a competitive check is now justified. So a goal that named no
+companies can still trigger company monitoring, driven by evidence rather than phrasing.
+A benchmark result deliberately does not count: normal academic output should not launch a
+competitor sweep.
+
+**Long-term memory is selective and honest.** Only items at or above HIGH importance are
+persisted; transient errors, duplicates, low-relevance hits and *all simulated data* are
+rejected at the door, so a keyless demo can never manufacture a fake history. Retrieval
+scores topic + entity + competitor overlap, importance, recency and recurrence, with a floor
+that keeps unrelated memory out — a quantum-computing goal retrieves nothing from AI-agent
+history. `"Continue monitoring this"` carries no subject, so its topics and tracked
+companies are restored from memory.
+
+Historical comparison classifies findings as **NEW / PREVIOUSLY KNOWN / TREND ACCELERATING**,
+and only ever against a baseline that was actually retrieved.
+
+Storage note: this project has no database, and memory that died with the process would not
+be long-term, so the store keeps the existing module-global bounded-`OrderedDict` shape and
+adds an atomically-written JSON file under `DATA_DIR`. No new dependency, no new service.
+
+**Memory never breaks a run.** Retrieval failure leaves the run on current context;
+persistence failure leaves the completed intelligence intact; malformed persisted records are
+quarantined individually. All three are reported honestly rather than hidden.
+
+---
+
+## ⚡ Performance
+
+Providers are queried **concurrently**, so a tool costs its slowest provider instead of the sum of
+all of them. Measured on live APIs:
+
+| | Before | After |
+|---|---|---|
+| Research fan-out (3 providers) | 3.0s | 2.3s |
+| News fan-out (5 providers) | 4.1s | 2.0s |
+| Competitor sweep (2 companies × 3 groups) | 7.2s | 1.9s |
+| Research goal, end to end | 6.5s | 3.2s |
+| Mixed goal, end to end | 10.6s | 5.9s |
+
+The competitor sweep gained the most because it fans out twice — once per company, then once per
+provider group — and both levels were sequential.
+
+Results are folded back in declared provider order, so `providers_used` and dedup order stay
+deterministic rather than following whichever provider answered first (verified identical across
+repeated runs).
+
+A connector can also lower its own retry ceiling via `max_attempts`. Semantic Scholar answers 429
+often even with a key, and under a concurrent fan-out its retries set the latency for the whole
+research tool, so it retries once instead of twice.
 
 ---
 
@@ -308,6 +409,11 @@ touch only three DOM nodes.
 - **Syndication-aware dedup.** Beyond URL identity and a normalized-title fingerprint, a third
   stage compares the opening tokens of a headline, which collapses the same wire story
   republished as `"<headline> - The New York Times"`.
+- **Real evidence outranks simulated evidence.** Placeholder records are synthesised to look
+  ideal — exactly on-topic, dated today — so they beat genuine findings on relevance and recency.
+  Simulated findings therefore carry an explicit scoring penalty, and the patent tool ranks live
+  filings above placeholders. Without this, a run with one live and one keyless provider builds its
+  insights from the placeholders while real data sits below the cut.
 
 ---
 
@@ -315,7 +421,7 @@ touch only three DOM nodes.
 
 ```bash
 cd backend && .venv/bin/python -m pytest tests/ -q
-# 72 passed
+# 108 passed
 ```
 
 Covers goal→plan, dynamic tool selection per goal, observation-driven adaptation, self-termination,
@@ -337,9 +443,14 @@ unchanged.
 |---|---|
 | ReAct agent loop (plan → decide → act → observe → analyze → repeat) | ✅ |
 | Multi-agent orchestration — 3 agents, scoped tools, real delegation | ✅ |
+| Working (short-term) memory, updated after every step | ✅ |
+| Selective per-agent context construction with recorded omissions | ✅ |
+| Observation-driven follow-up read back from memory | ✅ |
+| Long-term memory: selective persistence + relevance retrieval | ✅ |
+| Historical change detection (NEW / PREVIOUSLY KNOWN / TREND ACCELERATING) | ✅ |
 | Cross-agent collaboration (corroboration + handoff) with per-finding attribution | ✅ |
 | Dynamic tool selection, verified per goal | ✅ |
-| 5 tools over 12 providers | ✅ |
+| 5 tools over 13 providers | ✅ |
 | Gemini reasoning + deterministic fallback | ✅ |
 | Graceful provider degradation + circuit breakers | ✅ |
 | Prioritized insights (what happened / why it matters / action) | ✅ |
@@ -347,7 +458,7 @@ unchanged.
 | Intelligence dashboard with derived analytics | ✅ |
 | Intelligence Report — PDF / HTML / Markdown / JSON | ✅ |
 | Source provenance auditing | ✅ |
-| 72 automated tests | ✅ |
+| 108 automated tests | ✅ |
 | Public deployment | ❌ not yet — runs locally |
 | Scheduled autonomous re-runs | ❌ out of scope for the current tasks |
 | Multi-user accounts / persistence | ❌ runs are held in memory |

@@ -52,18 +52,54 @@ class SpecialistAgent:
         before_ids = set(state.seen_finding_ids)
         my_tool_calls_before = len(state.tool_calls)
 
-        # A scoped engine: only this agent's tools are reachable.
+        # ── consume the context the orchestrator built for this assignment ──
+        # This is the half of context sharing that used to be missing: the task
+        # carried a context payload and nothing read it. `focus_terms` are the
+        # concrete phrases drawn from earlier agents' findings, and they are handed
+        # to the decision engine so they change the queries this agent runs.
+        incoming = task.context or {}
+        focus_terms = [str(t) for t in (incoming.get("focus_terms") or []) if str(t).strip()]
+        context_labels = [str(v) for v in (incoming.get("labels") or [])]
+        shared_from = [str(v) for v in (incoming.get("source_agents") or [])
+                       if v and v != self.profile.key]
+
+        report.context_received = context_labels
+        report.context_shared_from = shared_from
+        report.context_focus = focus_terms
+        report.context_omitted = [
+            o for o in (incoming.get("omitted") or []) if isinstance(o, dict)
+        ]
+        report.context_facts = len(incoming.get("fact_ids") or [])
+        report.memory_version = int(incoming.get("memory_version") or 0)
+
+        # A scoped engine: only this agent's tools are reachable, and its searches
+        # are steered by the shared context.
         engine = DecisionEngine(
-            host.tools, host.llm, allowed_tools=set(task.allowed_tools)
+            host.tools,
+            host.llm,
+            allowed_tools=set(task.allowed_tools),
+            context_focus=focus_terms,
         )
 
+        detail = task.task
+        if context_labels:
+            detail += f" — context received: {', '.join(context_labels)}"
+        if shared_from:
+            detail += (
+                f"; {report.context_facts} finding(s) carried over from "
+                f"{', '.join(a.replace('_', ' ') for a in shared_from)}"
+            )
         logger.log(
             "thought",
             f"{self.profile.name} starting",
-            task.task,
+            detail,
             agent=self.profile.key,
             allowed_tools=list(task.allowed_tools),
             need_keys=list(task.need_keys),
+            context_received=context_labels,
+            context_shared_from=shared_from,
+            focus_terms=focus_terms,
+            memory_version=report.memory_version,
         )
 
         iterations = 0
@@ -223,12 +259,43 @@ class SpecialistAgent:
 class ResearchIntelligenceAgent(SpecialistAgent):
     """Academic and technological research: papers, methods, benchmarks, filings."""
 
+    # Signals that mean a technical development has left the lab. "benchmark" is
+    # deliberately absent: a benchmark result is normal academic output and treating
+    # it as commercial evidence is what makes an agent chase noise.
+    COMMERCIAL_SIGNALS = {"launch", "funding", "acquisition", "partnership", "regulatory"}
+
     def enrich(self, report: AgentReport, findings: list[Any], state: Any) -> None:
         # Trends = recurring technical phrases across the titles this agent found.
         report.research_trends = _recurring_phrases(findings)
         report.key_developments = [
             f.title for f in sorted(findings, key=lambda x: -x.relevance)[:3]
         ]
+
+        # Does any of this have commercial bearing? Two kinds of evidence count: a
+        # named company, or a signal that the work is being shipped rather than
+        # published. Reported as a flag so the orchestrator can act on it later.
+        leads: list[str] = []
+        reasons: list[str] = []
+        for finding in findings:
+            company = getattr(finding, "competitor", "") or ""
+            if company and company not in leads:
+                leads.append(company)
+            commercial = set(getattr(finding, "signals", []) or []) & self.COMMERCIAL_SIGNALS
+            for signal in sorted(commercial):
+                if signal not in reasons:
+                    reasons.append(signal)
+        report.competitive_leads = leads[:4]
+        if leads or reasons:
+            report.potential_competitive_relevance = True
+            bits = []
+            if leads:
+                bits.append(f"names {', '.join(leads[:3])}")
+            if reasons:
+                bits.append(f"carries {', '.join(reasons[:3])} signal(s)")
+            report.competitive_relevance_reason = (
+                "research evidence " + " and ".join(bits)
+                + " — worth checking whether it has reached the market"
+            )
 
     def summarize(self, report: AgentReport, findings: list[Any]) -> str:
         if not findings:

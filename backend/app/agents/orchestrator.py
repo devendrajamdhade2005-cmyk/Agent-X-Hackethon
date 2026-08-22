@@ -33,6 +33,7 @@ from .messages import (
     CollaborationEvent,
     ExecutionPlanEntry,
 )
+from ..memory.working import STEP_COMPLETED, STEP_FAILED
 from .specialists import CompetitiveIntelligenceAgent, ResearchIntelligenceAgent
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -68,6 +69,12 @@ class IntelligenceOrchestrator:
         plan = self._build_plan(host)
         state.execution_plan = [e.to_dict() for e in plan]
 
+        # PLAN → WORKING MEMORY. Stored as status-bearing steps so later stages can
+        # see what is done, what is running and what is still outstanding.
+        memory, manager = _memory(host), _manager(host)
+        if memory is not None and manager is not None:
+            manager.record_plan(memory, state.execution_plan)
+
         selected = [e for e in plan if e.selected]
         skipped = [e for e in plan if not e.selected]
 
@@ -96,6 +103,10 @@ class IntelligenceOrchestrator:
 
         # ── delegate, in planned order ───────────────────────
         for entry in sorted(selected, key=lambda e: e.order):
+            step_id = ""
+            if memory is not None and manager is not None:
+                step_id = manager.start_step(memory, entry.agent, entry.reason)
+
             task = self._task(host, entry, kind="primary")
             await self._delegate(host, ctx, task)
 
@@ -104,11 +115,38 @@ class IntelligenceOrchestrator:
             if report is not None:
                 self._review(host, report)
 
+            # RESULTS → WORKING MEMORY, then the orchestrator re-reads memory. This
+            # read-after-write is what makes the next decision depend on this one.
+            if memory is not None and manager is not None and report is not None:
+                manager.record_agent_report(
+                    memory,
+                    report=report,
+                    findings=[f for f in state.findings if f.id in set(report.finding_ids)],
+                    corroborated_ids=state.corroborated_finding_ids,
+                )
+                manager.finish_step(
+                    memory, step_id,
+                    status=STEP_FAILED if report.status == "failed" else STEP_COMPLETED,
+                    reference=f"{report.findings_count} finding(s)",
+                )
+                manager.observe_context(memory)
+
         # ── collaboration: follow-up work implied by the results ──
         await self._collaborate(host, ctx, plan)
 
         # ── merge and cross-validate ─────────────────────────
+        analysis_step = ""
+        if memory is not None and manager is not None:
+            analysis_step = manager.start_step(memory, ORCHESTRATOR.key, "Cross-agent analysis")
         self._merge(host)
+
+        if memory is not None and manager is not None:
+            manager.finish_step(
+                memory, analysis_step, status=STEP_COMPLETED,
+                reference=f"{len(state.corroborated_finding_ids)} cross-validated",
+            )
+            # Historical comparison, only against a baseline that actually exists.
+            manager.compare_with_baseline(memory)
 
         logger.speaking_as(self.profile.key)
         logger.orchestration(
@@ -270,6 +308,7 @@ class IntelligenceOrchestrator:
         kind: str = "primary",
         brief: str = "",
         reason: str = "",
+        trigger_facts: list[Any] | None = None,
     ) -> AgentTask:
         state = host.state
         profile = self.specialists[entry.agent].profile
@@ -291,6 +330,28 @@ class IntelligenceOrchestrator:
                     f" for {', '.join(state.competitors[:4])}." if state.competitors else "."
                 )
 
+        # CONTEXT — built for *this* agent and *this* objective. Previously every
+        # agent received the same blob of goal + keywords + the last three
+        # observations; now the memory layer decides what is relevant, and records
+        # what it deliberately withheld.
+        memory, manager = _memory(host), _manager(host)
+        context: dict[str, Any] = {
+            "user_goal": state.user_goal,
+            "keywords": list(state.keywords),
+            "competitors": list(state.competitors),
+        }
+        packet = None
+        if memory is not None and manager is not None:
+            packet = manager.context_for(
+                memory,
+                target_agent=entry.agent,
+                objective=brief,
+                kind=kind,
+                reason=reason or entry.reason,
+                trigger_facts=trigger_facts,
+            )
+            context = {**context, **packet.to_dict()}
+
         return AgentTask(
             run_id=state.run_id,
             from_agent=self.profile.key,
@@ -301,12 +362,7 @@ class IntelligenceOrchestrator:
             allowed_tools=list(profile.tool_names),
             need_keys=list(entry.need_keys) or list(profile.need_keys),
             max_iterations=3 if kind == "primary" else 1,
-            context={
-                "user_goal": state.user_goal,
-                "keywords": list(state.keywords),
-                "competitors": list(state.competitors),
-                "previous_observations": [o.summary for o in state.observations[-3:]],
-            },
+            context=context,
         )
 
     async def _delegate(
@@ -404,6 +460,7 @@ class IntelligenceOrchestrator:
         logger = host.logger
         logger.speaking_as(self.profile.key)
 
+        memory, manager = _memory(host), _manager(host)
         competitive = self.reports.get(COMPETITIVE_AGENT.key)
         research = self.reports.get(RESEARCH_AGENT.key)
 
@@ -450,16 +507,65 @@ class IntelligenceOrchestrator:
                     ),
                     evidence=[subject] if subject else [],
                 )
-                await self._delegate(host, ctx, task)
+                v_step = ""
+                if memory is not None and manager is not None:
+                    manager.record_decision(
+                        memory,
+                        "Research validation justified by a stored competitive signal",
+                        detail=f"'{trigger}' signal recorded in working memory",
+                    )
+                    v_step = manager.start_step(
+                        memory, RESEARCH_AGENT.key, "validate a competitor technology claim"
+                    )
+                v_report = await self._delegate(host, ctx, task)
+                if memory is not None and manager is not None:
+                    manager.record_agent_report(
+                        memory,
+                        report=v_report,
+                        findings=[
+                            f for f in state.findings if f.id in set(v_report.finding_ids)
+                        ],
+                        corroborated_ids=state.corroborated_finding_ids,
+                    )
+                    manager.finish_step(
+                        memory, v_step,
+                        status=STEP_FAILED if v_report.status == "failed" else STEP_COMPLETED,
+                        reference=f"{v_report.findings_count} finding(s)",
+                    )
                 research = self.reports.get(RESEARCH_AGENT.key)
 
-        # ── Research found strong work on tracked companies' turf → ask Competitive ──
+        # ── Research found something with competitive bearing → ask Competitive ──
+        #
+        # The trigger is read from working memory, not recomputed from the report.
+        # That is the point of the memory layer: the research result was stored, the
+        # orchestrator now reads the stored form back and decides on it. It also
+        # means a goal that named no companies can still justify a competitive
+        # check, because the relevance came from what was *found* rather than from
+        # what was asked.
+        stored = memory.competitive_relevance() if memory is not None else []
+        research_facts = [f for f in stored if f.source_agent == RESEARCH_AGENT.key][:3]
+        # When the goal named no companies, a market-ish signal is not enough to
+        # justify a competitor sweep — a "benchmark" mention on an academic paper is
+        # exactly the loose trigger that makes an agent look busy without being
+        # useful. The finding must name a company, because that is the only thing
+        # the competitive agent could actually go and check.
+        company_facts = [f for f in research_facts if f.competitors]
+        # A stored competitive-relevance judgement from the Research Agent also
+        # justifies the follow-up, even with no company named in the goal.
+        flags = [f for f in research_facts if f.kind == "competitive_relevance"]
+        justification = company_facts or flags
+        trigger_facts = research_facts if state.competitors else justification
+
+        companies = state.competitors or sorted(
+            {c for f in justification for c in f.competitors}
+        )
+
         if (
             research
             and not competitive
-            and state.competitors
             and state.budget_left() > 0
             and research.findings_count > 0
+            and (state.competitors or justification)
         ):
             entry = self._entry(
                 COMPETITIVE_AGENT, True,
@@ -472,16 +578,35 @@ class IntelligenceOrchestrator:
                 "checking whether the tracked companies have commercialised the research "
                 "direction the Research Intelligence Agent identified",
             )
+            if justification and not state.competitors:
+                lead = ", ".join(companies[:2]) or "a commercial signal"
+                why = (
+                    f"working memory holds a research finding flagged as competitively "
+                    f"relevant ({lead}), so commercial verification is now justified "
+                    f"even though the goal named no companies"
+                )
+            else:
+                why = (
+                    "the Research Intelligence Agent found relevant work and the goal names "
+                    "companies, so commercial follow-through is worth checking"
+                )
+            if memory is not None and manager is not None:
+                manager.record_decision(
+                    memory,
+                    "Competitive verification justified by stored research findings",
+                    detail=why,
+                )
+            subject_hint = (
+                f"{', '.join(companies[:3])} have" if companies else "the market has"
+            )
             task = self._task(
                 host, entry, kind="follow_up",
                 brief=(
-                    f"Check whether {', '.join(state.competitors[:3])} have commercialised the "
+                    f"Check whether {subject_hint} commercialised the "
                     f"research direction identified for {_topics(state)}."
                 ),
-                reason=(
-                    "the Research Intelligence Agent found relevant work and the goal names "
-                    "companies, so commercial follow-through is worth checking"
-                ),
+                reason=why,
+                trigger_facts=trigger_facts,
             )
             self._record_collaboration(
                 host,
@@ -494,9 +619,31 @@ class IntelligenceOrchestrator:
                     "orchestrator asked the Competitive Intelligence Agent whether the tracked "
                     "companies are shipping it."
                 ),
-                evidence=research.key_developments[:2],
+                evidence=(
+                    [f.text for f in trigger_facts[:2]]
+                    or research.key_developments[:2]
+                ),
             )
-            await self._delegate(host, ctx, task)
+            step_id = ""
+            if memory is not None and manager is not None:
+                step_id = manager.start_step(
+                    memory, COMPETITIVE_AGENT.key, "follow-up requested by the orchestrator"
+                )
+            report = await self._delegate(host, ctx, task)
+            if memory is not None and manager is not None:
+                manager.record_agent_report(
+                    memory,
+                    report=report,
+                    findings=[
+                        f for f in state.findings if f.id in set(report.finding_ids)
+                    ],
+                    corroborated_ids=state.corroborated_finding_ids,
+                )
+                manager.finish_step(
+                    memory, step_id,
+                    status=STEP_FAILED if report.status == "failed" else STEP_COMPLETED,
+                    reference=f"{report.findings_count} finding(s)",
+                )
 
     # ─────────────────────────────────────────────────────────
     # 6. MERGE + cross-validate
@@ -724,6 +871,20 @@ class IntelligenceOrchestrator:
 # ─────────────────────────────────────────────────────────────
 # helpers
 # ─────────────────────────────────────────────────────────────
+def _memory(host: Any):
+    """Working memory for this run, or None.
+
+    Guarded rather than assumed: the orchestrator is also driven directly in tests
+    with a minimal host double, and memory must be an enhancement, not a new
+    hard dependency of the multi-agent flow.
+    """
+    return getattr(getattr(host, "state", None), "memory", None)
+
+
+def _manager(host: Any):
+    return getattr(host, "memory_manager", None)
+
+
 def _short(agent_key: str) -> str:
     return {
         "research_agent": "Research Intelligence Agent",

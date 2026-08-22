@@ -147,9 +147,25 @@ class AgentReport:
     # Research-specific
     research_trends: list[str] = field(default_factory=list)
     key_developments: list[str] = field(default_factory=list)
+    # Set by the Research Agent when what it found has commercial bearing. The
+    # orchestrator reads this out of working memory to decide whether a competitive
+    # check is justified, which is how a research result can create work for
+    # another agent.
+    potential_competitive_relevance: bool = False
+    competitive_relevance_reason: str = ""
+    competitive_leads: list[str] = field(default_factory=list)
     # Competitive-specific
     competitors_analyzed: list[str] = field(default_factory=list)
     market_signals: list[str] = field(default_factory=list)
+    # Context actually received for this assignment. Recorded so the UI can show
+    # per-agent context transparency from the real construction rather than from a
+    # hardcoded list.
+    context_received: list[str] = field(default_factory=list)
+    context_shared_from: list[str] = field(default_factory=list)
+    context_focus: list[str] = field(default_factory=list)
+    context_omitted: list[dict[str, str]] = field(default_factory=list)
+    context_facts: int = 0
+    memory_version: int = 0
     # Shared
     coverage: Literal["live", "partial", "simulated", "unavailable"] = "live"
     degraded_providers: list[dict[str, str]] = field(default_factory=list)
@@ -175,8 +191,17 @@ class AgentReport:
             "signals": self.signals,
             "research_trends": self.research_trends,
             "key_developments": self.key_developments,
+            "potential_competitive_relevance": self.potential_competitive_relevance,
+            "competitive_relevance_reason": self.competitive_relevance_reason,
+            "competitive_leads": self.competitive_leads,
             "competitors_analyzed": self.competitors_analyzed,
             "market_signals": self.market_signals,
+            "context_received": self.context_received,
+            "context_shared_from": self.context_shared_from,
+            "context_focus": self.context_focus,
+            "context_omitted": self.context_omitted,
+            "context_facts": self.context_facts,
+            "memory_version": self.memory_version,
             "coverage": self.coverage,
             "degraded_providers": self.degraded_providers,
             "errors": self.errors,
@@ -205,6 +230,12 @@ class AgentReport:
             "coverage": self.coverage,
             "confidence": round(self.confidence, 3),
             "summary": self.reasoning_summary,
+            "context_received": self.context_received,
+            "context_shared_from": self.context_shared_from,
+            "context_focus": self.context_focus,
+            "context_omitted": self.context_omitted,
+            "context_facts": self.context_facts,
+            "memory_version": self.memory_version,
             "observations": self.observations,
             "degraded_providers": self.degraded_providers,
             "errors": self.errors,
@@ -212,6 +243,9 @@ class AgentReport:
         if self.from_agent == RESEARCH_AGENT.key:
             payload["research_trends"] = self.research_trends
             payload["key_developments"] = self.key_developments
+            payload["potential_competitive_relevance"] = self.potential_competitive_relevance
+            payload["competitive_relevance_reason"] = self.competitive_relevance_reason
+            payload["competitive_leads"] = self.competitive_leads
         if self.from_agent == COMPETITIVE_AGENT.key:
             payload["competitors_analyzed"] = self.competitors_analyzed
             payload["market_signals"] = self.market_signals

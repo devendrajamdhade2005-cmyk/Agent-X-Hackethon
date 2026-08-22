@@ -26,6 +26,10 @@ Phase = Literal[
     "orchestration",
     "delegation",
     "collaboration",
+    "context",
+    "memory",
+    "retrieval",
+    "consolidation",
     "thought",
     "action",
     "observation",
@@ -38,7 +42,8 @@ Phase = Literal[
 ]
 
 # Judged event taxonomy (§ activity log): ORCHESTRATION, DELEGATION, TOOL_CALL,
-# OBSERVATION, COLLABORATION, RESULT, ERROR.
+# OBSERVATION, COLLABORATION, RESULT, ERROR — plus MEMORY, so context and memory
+# activity is visibly its own class of work rather than hidden inside ORCHESTRATION.
 EVENT_TYPES: dict[str, str] = {
     "start": "ORCHESTRATION",
     "goal": "ORCHESTRATION",
@@ -50,6 +55,10 @@ EVENT_TYPES: dict[str, str] = {
     "observation": "OBSERVATION",
     "thought": "OBSERVATION",
     "collaboration": "COLLABORATION",
+    "context": "MEMORY",
+    "memory": "MEMORY",
+    "retrieval": "MEMORY",
+    "consolidation": "MEMORY",
     "insight": "RESULT",
     "final": "RESULT",
     "done": "RESULT",
@@ -62,6 +71,10 @@ ICONS: dict[str, str] = {
     "orchestration": "🧭",
     "delegation": "📤",
     "collaboration": "🔄",
+    "context": "🧩",
+    "memory": "🧠",
+    "retrieval": "📚",
+    "consolidation": "💾",
     "goal": "🎯",
     "plan": "🧠",
     "thought": "🧠",
@@ -80,6 +93,10 @@ LABELS: dict[str, str] = {
     "orchestration": "Orchestration",
     "delegation": "Delegation",
     "collaboration": "Collaboration",
+    "context": "Context",
+    "memory": "Working memory",
+    "retrieval": "Memory retrieval",
+    "consolidation": "Memory consolidation",
     "goal": "Goal understood",
     "plan": "Planning",
     "thought": "Reasoning",
@@ -241,6 +258,21 @@ class ActivityLogger:
 
     def collaboration(self, title: str, detail: str = "", **kw: Any) -> ActivityEntry:
         return self.log("collaboration", title, detail, **kw)
+
+    # ── context & memory ────────────────────────────────────
+    # These describe *actions and outcomes* only: what was captured, shared,
+    # retained or retrieved. Never prompts, never private reasoning.
+    def context(self, title: str, detail: str = "", **kw: Any) -> ActivityEntry:
+        return self.log("context", title, detail, **kw)
+
+    def memory(self, title: str, detail: str = "", **kw: Any) -> ActivityEntry:
+        return self.log("memory", title, detail, **kw)
+
+    def retrieval(self, title: str, detail: str = "", **kw: Any) -> ActivityEntry:
+        return self.log("retrieval", title, detail, **kw)
+
+    def consolidation(self, title: str, detail: str = "", **kw: Any) -> ActivityEntry:
+        return self.log("consolidation", title, detail, **kw)
 
     def done(self, title: str = "Task completed", detail: str = "", **kw: Any) -> ActivityEntry:
         return self.log("done", title, detail, **kw)

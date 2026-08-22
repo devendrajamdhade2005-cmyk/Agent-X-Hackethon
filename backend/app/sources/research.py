@@ -95,6 +95,12 @@ class SemanticScholarConnector(SourceConnector):
     requires_key = True
     rate_limit_per_min = 20
     timeout_seconds = 15.0
+    # Even *with* a key this endpoint answers 429 often — measured at two 429s
+    # before a success. Since providers are queried concurrently, those retries
+    # set the latency of the whole research tool (5.4s, against 1.8s for arXiv
+    # and OpenAlex together). One retry keeps most of the benefit; arXiv and
+    # OpenAlex already cover the run when this source gives up.
+    max_attempts = 2
     docs_url = "https://api.semanticscholar.org/api-docs/graph"
 
     _FIELDS = "title,abstract,authors,year,publicationDate,url,citationCount,venue,externalIds,openAccessPdf"

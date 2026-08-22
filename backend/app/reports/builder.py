@@ -75,7 +75,7 @@ PROVIDER_ORIGIN: dict[str, dict[str, str]] = {
         "operator": "SerpApi",
         "endpoint": "https://serpapi.com/search?engine=google_patents",
         "what": "Google Patents results across multiple jurisdictions.",
-        "auth": "paid API key (free trial available)",
+        "auth": "free plan key (250 searches/month)",
     },
     "newsapi": {
         "operator": "NewsAPI.org",
@@ -196,6 +196,7 @@ def build_report(run: dict[str, Any]) -> dict[str, Any]:
         "findings_by_category": _group_findings(findings),
         "execution_summary": _execution_summary(state, metrics),
         "agent_contributions": _agent_contributions(run, state, metrics),
+        "context_memory": _context_memory(run),
         "sources": _sources(run, findings, metrics),
         "caveats": _caveats(run, state, metrics, findings),
         "reasoner": metrics.get("reasoner") or "heuristic",
@@ -206,6 +207,114 @@ def build_report(run: dict[str, Any]) -> dict[str, Any]:
 # ─────────────────────────────────────────────────────────────
 # sections
 # ─────────────────────────────────────────────────────────────
+AGENT_LABEL = {
+    "research_agent": "Research Intelligence Agent",
+    "competitive_agent": "Competitive Intelligence Agent",
+    "orchestrator": "Intelligence Orchestrator",
+}
+
+
+def _context_memory(run: dict[str, Any]) -> dict[str, Any]:
+    """Context and memory, for the report.
+
+    `used_historical_context` is what the narrative may claim. It is only true when
+    memory was actually retrieved *and* used, so the report can never imply it drew
+    on history it never had.
+    """
+    mem = run.get("memory") or {}
+    if not mem.get("available"):
+        return {"available": False}
+
+    working = mem.get("working") or {}
+    long_term = mem.get("long_term") or {}
+    change = mem.get("change") or {}
+    ctx = working.get("task_context") or {}
+    retrieved = list(long_term.get("retrieved") or [])
+
+    # Which agents were handed context that came from another agent.
+    shared: list[dict[str, Any]] = []
+    for agent in run.get("agents") or []:
+        if agent.get("context_shared_from"):
+            shared.append({
+                "agent": agent.get("name") or agent.get("agent"),
+                "icon": agent.get("icon", ""),
+                "from": [
+                    AGENT_LABEL.get(a, a.replace("_", " ").title())
+                    for a in agent.get("context_shared_from") or []
+                ],
+                "facts": int(agent.get("context_facts") or 0),
+                "received": list(agent.get("context_received") or []),
+                "focus": list(agent.get("context_focus") or []),
+                "withheld": [o.get("why", "") for o in agent.get("context_omitted") or []],
+            })
+
+    return {
+        "available": True,
+        "task_context": {
+            "topics": list(ctx.get("topics") or []),
+            "research_topics": list(ctx.get("research_topics") or []),
+            "competitors": list(ctx.get("competitors") or []),
+            "entities": list(ctx.get("entities") or []),
+            "domains": list(ctx.get("domain_labels") or []),
+            "time_scope": ctx.get("time_scope") or "unspecified",
+            "constraints": list(ctx.get("constraints") or []),
+            "continuation": bool(ctx.get("continuation")),
+            "author": ctx.get("author") or "heuristic",
+        },
+        "working": {
+            "version": int(working.get("version") or 0),
+            "fact_count": int(working.get("fact_count") or 0),
+            "important_fact_count": int(working.get("important_fact_count") or 0),
+            "updates": len(working.get("timeline") or []),
+            "compressions": int(working.get("compressions") or 0),
+            "compressed_count": int(working.get("compressed_count") or 0),
+            "narrative_summary": working.get("narrative_summary") or "",
+            "coverage_gaps": list(working.get("coverage_gaps") or []),
+            "notes": list(working.get("notes") or []),
+        },
+        "plan_steps": [
+            {"name": s.get("step_name", ""), "status": s.get("status", ""),
+             "reference": s.get("result_reference", "")}
+            for s in working.get("plan_steps") or []
+        ],
+        "retained_facts": [
+            {
+                "text": f.get("text", ""),
+                "importance": f.get("importance", ""),
+                "agent": AGENT_LABEL.get(f.get("source_agent", ""), f.get("source_agent", "")),
+                "simulated": bool(f.get("simulated")),
+                "url": f.get("url", ""),
+            }
+            for f in (working.get("facts") or [])[:8]
+        ],
+        "shared_context": shared,
+        "retrieved": [
+            {
+                "type": m.get("type_label") or m.get("memory_type"),
+                "summary": m.get("summary") or m.get("content") or "",
+                "from_run": m.get("source_run_id", ""),
+                "relevance": m.get("relevance"),
+                "recurrence": m.get("recurrence", 1),
+            }
+            for m in retrieved
+        ],
+        "retrieval_status": long_term.get("retrieval_status") or "not attempted",
+        "consolidation": long_term.get("consolidation") or {},
+        "store_total": (long_term.get("store") or {}).get("total"),
+        # The report may only speak about history when history was really used.
+        "used_historical_context": bool(retrieved),
+        "change": {
+            "compared": bool(change.get("compared")),
+            "verdict": change.get("verdict") or "",
+            "detail": change.get("detail") or "",
+            "new_count": int(change.get("new_count") or 0),
+            "known_count": int(change.get("known_count") or 0),
+            "baseline_run_id": change.get("baseline_run_id") or "",
+        },
+    }
+
+
+
 def _status_label(status: str) -> str:
     return {
         "completed": "Completed",

@@ -9,6 +9,7 @@ mention that company, so the agent can reason about per-competitor coverage.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 
 from .base import FindingRecord, Tool, ToolContext, ToolInput, ToolResult
@@ -47,35 +48,47 @@ class CompetitorTool(Tool):
             result.error = "competitor_search requires at least one competitor name"
             return
 
-        # One scoped sweep per company so results stay attributable.
-        for company in tool_input.competitors[:3]:
+        companies = tool_input.competitors[:3]
+
+        # One scoped sweep per company so results stay attributable. The sweeps —
+        # and the three provider groups inside each — are independent network work,
+        # so they run concurrently: sequentially this tool cost the sum of every
+        # company times every group, which made it the slowest step of a run by a
+        # wide margin. Each branch writes to its own scratch result and they are
+        # merged in company order, so the reported provider list stays stable.
+        async def sweep(company: str) -> tuple[str, list[FindingRecord], ToolResult]:
             scoped = replace(
                 tool_input,
                 query=f"{company} {' '.join(tool_input.keywords[:2])}".strip(),
                 competitors=[company],
-                limit=max(4, tool_input.limit // max(1, len(tool_input.competitors[:3]))),
+                limit=max(4, tool_input.limit // max(1, len(companies))),
             )
+            # A scratch result per group, not one shared between them: sharing
+            # would record providers in whichever order the network replied.
+            news, repos, social = (ToolResult(tool=self.name) for _ in range(3))
+            groups = await asyncio.gather(
+                self._collect(
+                    ("rss", "hackernews", "newsapi", "newsdata", "gnews"),
+                    scoped, ctx, news, competitor=company,
+                ),
+                self._collect(
+                    ("github",), scoped, ctx, repos,
+                    competitor=company, extra={"org": company},
+                ),
+                self._collect(("reddit",), scoped, ctx, social, competitor=company),
+            )
+            merged = ToolResult(tool=self.name)
+            for scratch in (news, repos, social):
+                merged.absorb(scratch)
+            return company, [item for group in groups for item in group], merged
 
-            news_items = await self._collect(
-                ("rss", "hackernews", "newsapi", "newsdata", "gnews"),
-                scoped,
-                ctx,
-                result,
-                competitor=company,
-            )
-            repo_items = await self._collect(
-                ("github",),
-                scoped,
-                ctx,
-                result,
-                competitor=company,
-                extra={"org": company},
-            )
-            social_items = await self._collect(
-                ("reddit",), scoped, ctx, result, competitor=company
-            )
+        sweeps = await asyncio.gather(
+            *(sweep(company) for company in companies), return_exceptions=True
+        )
 
-            for item in news_items + repo_items + social_items:
+        for company, items, scratch in (s for s in sweeps if not isinstance(s, BaseException)):
+            result.absorb(scratch)
+            for item in items:
                 if not _mentions(item, company):
                     continue
                 item.signals = _announcement_signals(item)

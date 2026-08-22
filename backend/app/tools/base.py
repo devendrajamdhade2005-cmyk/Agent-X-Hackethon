@@ -13,6 +13,7 @@ Design rules that matter for genuine agentic behaviour:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
 import time
@@ -180,6 +181,25 @@ class ToolResult:
     def count(self) -> int:
         return len(self.items)
 
+    def absorb(self, other: "ToolResult") -> None:
+        """Fold another result's provider bookkeeping into this one.
+
+        Lets a tool run several `_collect` calls concurrently, each writing to its
+        own scratch result, then merge them in a fixed order. Without that, the
+        order of `providers_used` would follow whichever provider replied first
+        and the same run could report its sources differently each time.
+        """
+        if other.simulated:
+            self.simulated = True
+        for name in other.providers_used:
+            if name not in self.providers_used:
+                self.providers_used.append(name)
+        for failure in other.providers_failed:
+            if not any(f["provider"] == failure["provider"] for f in self.providers_failed):
+                self.providers_failed.append(failure)
+        if other.note and not self.note:
+            self.note = other.note
+
 
 @dataclass
 class ToolAvailability:
@@ -291,12 +311,27 @@ class Tool(ABC):
         competitor: str = "",
         extra: dict[str, Any] | None = None,
     ) -> list[FindingRecord]:
-        """Fan out over providers, tolerate individual failures, normalize output."""
-        collected: list[FindingRecord] = []
-        for name in provider_names:
-            connector = self.registry.get(name)
-            if connector is None:
-                continue
+        """Fan out over providers, tolerate individual failures, normalize output.
+
+        Providers are queried concurrently. They are independent network calls, so
+        querying them in sequence made every tool cost the *sum* of its providers:
+        a slow, retry-heavy source like Semantic Scholar (which answers 429 twice
+        before succeeding, even with a key) added its full latency to arXiv's and
+        OpenAlex's. Concurrently the tool costs the slowest provider instead.
+
+        Results are still folded back in `provider_names` order so dedup order,
+        `providers_used` and `providers_failed` stay deterministic regardless of
+        which provider happens to answer first.
+        """
+        targets = [
+            (name, connector)
+            for name in provider_names
+            if (connector := self.registry.get(name)) is not None
+        ]
+        if not targets:
+            return []
+
+        async def gather_one(name: str, connector: Any):
             query = SourceQuery(
                 source=name,
                 source_type=connector.source_type,
@@ -307,9 +342,29 @@ class Tool(ABC):
                 since_days=tool_input.since_days,
                 extra=dict(extra or {}),
             )
-            outcome = await collect_from_source(
+            return await collect_from_source(
                 connector, ctx.http_client, query, simulation_mode=ctx.simulation_mode
             )
+
+        outcomes = await asyncio.gather(
+            *(gather_one(name, conn) for name, conn in targets),
+            return_exceptions=True,
+        )
+
+        collected: list[FindingRecord] = []
+        for (name, _connector), outcome in zip(targets, outcomes, strict=True):
+            if isinstance(outcome, BaseException):
+                # collect_from_source already contains failures; this is a last
+                # resort so one unexpected error cannot lose the other providers.
+                if not any(f["provider"] == name for f in result.providers_failed):
+                    result.providers_failed.append(
+                        {
+                            "provider": name,
+                            "error": f"{type(outcome).__name__}: {outcome}",
+                            "note": "",
+                        }
+                    )
+                continue
             if outcome.simulated:
                 result.simulated = True
             if (outcome.ok or outcome.items) and name not in result.providers_used:

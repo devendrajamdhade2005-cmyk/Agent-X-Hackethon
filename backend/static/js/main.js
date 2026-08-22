@@ -19,6 +19,7 @@ import { areaChart, bubbles, donut, donutColor, meter } from "./analytics/charts
 import * as cards from "./intelligence/cards.js";
 import * as agentUI from "./agent/activity.js";
 import { renderMultiAgent } from "./agent/multiagent.js";
+import { renderMemory } from "./agent/memory.js";
 import { closeDrawer, openDrawer } from "./drawers/detailDrawer.js";
 
 const VIEWS = ["overview", "research", "competitors", "patents", "news", "insights", "reports"];
@@ -665,6 +666,9 @@ function renderReportBar() {
 function renderTrail() {
   // Multi-agent execution first — it is the headline proof of orchestration.
   setHTML($("agents-body"), renderMultiAgent(store.run));
+  // Context & memory sits with the orchestration proof: it is the same story seen
+  // from the other side — what was retained and shared, rather than who ran.
+  setHTML($("memory-body"), renderMemory(store.run));
   setHTML($("trail-body"), agentUI.reasoningTrail(store.run) + `
     <details class="reveal tech">
       <summary>Show technical details</summary>

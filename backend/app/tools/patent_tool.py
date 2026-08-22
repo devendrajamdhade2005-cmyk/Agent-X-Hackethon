@@ -49,10 +49,19 @@ class PatentTool(Tool):
                 item.signals = ["competitor-assignee"]
             unique.append(item)
 
-        # A tracked competitor as assignee is the highest-value patent signal, so
-        # surface those first regardless of date.
+        # Ranking, in order of decreasing importance:
+        #   1. a tracked competitor as assignee — the highest-value patent signal
+        #   2. real filings ahead of simulated ones
+        #   3. most recent first
+        #
+        # Rule 2 is load-bearing whenever one provider is live and another is
+        # simulated. Placeholder records are generated with today's date, so on a
+        # date-only sort they outrank genuine Google Patents results (which publish
+        # 18+ months after filing) and fill every slot, leaving a run that looks
+        # entirely simulated while live data sits behind the cut.
         unique.sort(
-            key=lambda i: (bool(i.competitor), i.published_date or ""), reverse=True
+            key=lambda i: (bool(i.competitor), not i.simulated, i.published_date or ""),
+            reverse=True,
         )
         result.items = unique[: tool_input.limit]
 

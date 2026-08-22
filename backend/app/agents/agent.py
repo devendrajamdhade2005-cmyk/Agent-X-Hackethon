@@ -27,6 +27,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ..config import settings
+from ..memory import MemoryManager
 from ..services.activity_logger import ActivityEntry, ActivityLogger
 from ..sources.registry import build_http_client, registry as source_registry
 from ..tools.base import ToolContext, ToolInput, ToolResult
@@ -71,6 +72,7 @@ class AgentRunResult:
     execution_plan: list[dict[str, Any]] = field(default_factory=list)
     agents: list[dict[str, Any]] = field(default_factory=list)
     collaboration_events: list[dict[str, Any]] = field(default_factory=list)
+    memory: dict[str, Any] = field(default_factory=dict)
     activity_text: str = ""
     insights_text: str = ""
 
@@ -89,6 +91,7 @@ class AgentRunResult:
             "execution_plan": self.execution_plan,
             "agents": self.agents,
             "collaboration_events": self.collaboration_events,
+            "memory": self.memory,
             "activity_text": self.activity_text,
             "insights_text": self.insights_text,
         }
@@ -123,6 +126,9 @@ class InsightPulseAgent:
         self.insight_writer = InsightGenerator(self.llm)
         self.summary_writer = SummaryWriter(self.llm)
         self.orchestrator = IntelligenceOrchestrator()
+        # Owns task context, working memory and long-term memory. The orchestrator
+        # and specialists read and write memory only through this.
+        self.memory_manager = MemoryManager(llm=self.llm, logger=self.logger)
 
     # ─────────────────────────────────────────────────────────
     # Entry point
@@ -259,6 +265,27 @@ class InsightPulseAgent:
                 "All providers will return deterministic synthetic data, clearly labelled.",
             )
 
+        # UNDERSTAND → structured task context, then working memory for this run,
+        # then whatever relevant context previous runs left behind. Done before
+        # planning so the plan can be shaped by restored topics on a continuation.
+        state.memory = await self.memory_manager.begin_run(
+            run_id=state.run_id,
+            goal=state.user_goal,
+            topics=state.tracking_topics,
+            keywords=state.keywords,
+            competitors=state.competitors,
+        )
+        ctx = state.memory.task_context
+        if ctx is not None:
+            # A continuation goal may have had its subject restored from memory.
+            # Adopt it so the plan and the tools work on the right thing.
+            if ctx.topics and not state.tracking_topics:
+                state.tracking_topics = list(ctx.topics)
+            if ctx.topics and not state.keywords:
+                state.keywords = list(ctx.topics)
+            if ctx.competitors and not state.competitors:
+                state.competitors = list(ctx.competitors)
+
     # ─────────────────────────────────────────────────────────
     # 2. PLAN
     # ─────────────────────────────────────────────────────────
@@ -312,6 +339,15 @@ class InsightPulseAgent:
                     need.reason,
                     need=need.key,
                 )
+
+        # Keep the task context's view of requested domains aligned with the plan
+        # the agent actually committed to.
+        if state.memory is not None and state.memory.task_context is not None:
+            tc = state.memory.task_context
+            tc.requested_domains = required
+            tc.metadata["optional_domains"] = optional
+            if not tc.research_topics and {"research", "patent"} & set(required):
+                tc.research_topics = list(tc.topics or state.keywords)[:6]
 
     # ─────────────────────────────────────────────────────────
     # 3-8. MULTI-AGENT EXECUTION
@@ -640,6 +676,18 @@ class InsightPulseAgent:
         state.current_step = "done"
         state.finished_at = datetime.now(UTC).isoformat(timespec="seconds")
 
+        # MEMORY CONSOLIDATION — last, so a persistence failure can never cost us
+        # the completed intelligence. `consolidate` swallows its own errors.
+        if state.memory is not None:
+            final_step = self.memory_manager.start_step(
+                state.memory, "orchestrator", "prioritize insights and write the briefing"
+            )
+            self.memory_manager.finish_step(
+                state.memory, final_step, status="completed",
+                reference=f"{len(insights)} insight(s)",
+            )
+            self.memory_manager.consolidate(state.memory, summary=state.summary)
+
         self.logger.done(
             "Task completed" if state.status == "completed" else "Task completed (partial)",
             state.summary.split("\n\n")[0] if state.summary else "",
@@ -670,6 +718,7 @@ class InsightPulseAgent:
             execution_plan=state.execution_plan,
             agents=self.orchestrator.contributions(self),
             collaboration_events=state.collaboration_events,
+            memory=self.memory_manager.public(state.memory),
             metrics={
                 "duration_ms": duration_ms,
                 "iterations": state.iteration_count,
@@ -698,6 +747,19 @@ class InsightPulseAgent:
                 ],
                 "collaboration_events": len(state.collaboration_events),
                 "corroborated_findings": len(state.corroborated_finding_ids),
+                "memory": {
+                    "version": state.memory.version if state.memory else 0,
+                    "facts": len(state.memory.facts) if state.memory else 0,
+                    "important_facts": (
+                        len(state.memory.important_facts()) if state.memory else 0
+                    ),
+                    "retrieved": (
+                        len(state.memory.retrieved_memories) if state.memory else 0
+                    ),
+                    "compressions": state.memory.compressions if state.memory else 0,
+                    "consolidated": self.memory_manager.consolidation.get("stored", 0),
+                    "change_verdict": self.memory_manager.change.verdict,
+                },
             },
             activity_text=self.logger.render(),
             insights_text=getattr(self, "_insights_text", ""),

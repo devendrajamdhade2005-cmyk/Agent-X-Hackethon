@@ -236,10 +236,16 @@ async def collect_from_source(
         return outcome
 
     # 4. Retry loop with jittered exponential backoff.
+    #
+    # A connector may lower its own ceiling. Providers are queried concurrently,
+    # so a tool costs its slowest provider: one source that answers 429 twice
+    # before succeeding holds up every other source in the same call. Retrying it
+    # fewer times trades a little of its coverage for the whole tool's latency.
+    max_attempts = getattr(connector, "max_attempts", None) or MAX_ATTEMPTS
     bucket = registry.bucket(source, connector.rate_limit_per_min)
     started = time.perf_counter()
     last_error = ""
-    for attempt in range(1, MAX_ATTEMPTS + 1):
+    for attempt in range(1, max_attempts + 1):
         outcome.attempts = attempt
         try:
             await bucket.acquire()
@@ -282,7 +288,7 @@ async def collect_from_source(
         except Exception as exc:  # noqa: BLE001 - connector bugs must not kill the run
             last_error = f"{type(exc).__name__}: {exc}"
             sleep_hint = None
-        if attempt < MAX_ATTEMPTS:
+        if attempt < max_attempts:
             backoff = BASE_BACKOFF * (2 ** (attempt - 1)) + random.uniform(0, 0.25)
             await asyncio.sleep(sleep_hint or backoff)
 

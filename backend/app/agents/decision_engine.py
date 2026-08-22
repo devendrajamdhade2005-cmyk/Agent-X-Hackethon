@@ -218,6 +218,17 @@ class ObservationAnalyzer:
         elif citations >= 5:
             score += 0.03
 
+        # 7. Simulated evidence is ranked below real evidence.
+        #
+        # Placeholder records are synthesised to look ideal — exactly on-topic and
+        # dated today — so on the criteria above they beat genuine findings. Left
+        # unpenalised, a run with a live provider *and* a keyless one builds its
+        # insights from the placeholders while real data sits below the cut. The
+        # penalty is large enough to lose a tie, small enough that simulated data
+        # still surfaces when it is all the run has.
+        if item.simulated:
+            score -= 0.25
+
         return round(max(0.0, min(1.0, score)), 3)
 
     def detect_signals(self, item: FindingRecord) -> list[str]:
@@ -256,6 +267,7 @@ class DecisionEngine:
         tools: ToolRegistry,
         llm: LLMClient | None = None,
         allowed_tools: set[str] | None = None,
+        context_focus: list[str] | None = None,
     ) -> None:
         self.tools = tools
         self.llm = llm
@@ -263,6 +275,10 @@ class DecisionEngine:
         # tools. That is what makes the agents genuinely specialized rather than
         # three names for the same capability.
         self.allowed_tools = set(allowed_tools) if allowed_tools else None
+        # Search terms carried in from another agent's findings via the context
+        # builder. They bias the query this engine constructs, which is what makes
+        # shared context change behaviour instead of merely being logged.
+        self.context_focus = [t for t in (context_focus or []) if str(t).strip()][:4]
 
     # ── public API ──────────────────────────────────────────
     async def decide(self, state: AgentState) -> Decision:
@@ -566,6 +582,15 @@ class DecisionEngine:
         focus: list[str] | None = None,
     ) -> ToolInput:
         keywords = state.keywords or state.tracking_topics or [state.user_goal[:60]]
+        # Context-supplied terms lead. A follow-up prompted by an earlier agent's
+        # finding should search for *that* finding's subject, not repeat the
+        # original goal's keywords and rediscover the same ground.
+        if self.context_focus:
+            merged = [*self.context_focus]
+            for term in keywords:
+                if term.lower() not in {m.lower() for m in merged}:
+                    merged.append(term)
+            keywords = merged
         attempt = need.attempts
 
         # Vary the query across attempts so a retry is a genuine refinement.
