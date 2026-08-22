@@ -40,16 +40,18 @@ class GooglePatentsConnector(SourceConnector):
     MIN_HISTORY_DAYS = 730
 
     # SerpAPI reports "no results" as an `error` string rather than an empty
-    # list, and serves it with HTTP 400. Treating that as a provider outage
-    # would push the tool into simulated data, so it is handled as a real zero.
-    _EMPTY_MARKERS = ("hasn't returned any results", "have not returned any results")
+    # list. Raising on it would look like a provider outage and push the tool
+    # into simulated data, so this one phrase is treated as a legitimate zero.
+    _EMPTY_MARKER = "hasn't returned any results"
 
     async def fetch(self, client: httpx.AsyncClient, q: SourceQuery) -> list[RawItem]:
         query = q.query or " ".join(q.keywords[:3])
         if q.competitors:
             query = f"{query} ({' OR '.join(q.competitors[:3])})"
         floor = datetime.now(UTC) - timedelta(days=self.MIN_HISTORY_DAYS)
-        since = q.since if q.since.tzinfo else q.since.replace(tzinfo=UTC)
+        since = q.since
+        if since.tzinfo is None:
+            since = since.replace(tzinfo=UTC)
         # Relevance ordering, bounded by a publication-date floor.
         #
         # `sort=new` looks right for an intelligence feed but discards Google
@@ -67,18 +69,13 @@ class GooglePatentsConnector(SourceConnector):
                 "after": f"publication:{min(since, floor).strftime('%Y%m%d')}",
                 "api_key": self.api_key,
             },
-            # "No results" arrives as HTTP 400 with an explanatory body.
-            tolerate_status=(400,),
         )
-        try:
-            payload = resp.json()
-        except ValueError as exc:
-            raise SourceError(f"unparseable response ({resp.status_code})", retryable=False) from exc
+        payload = resp.json()
         if payload.get("error"):
             detail = str(payload["error"])
-            if any(m in detail.lower() for m in self._EMPTY_MARKERS):
+            if self._EMPTY_MARKER in detail.lower():
                 return []
-            raise SourceError(detail, retryable=resp.status_code >= 500)
+            raise SourceError(detail, retryable=False)
 
         items: list[RawItem] = []
         for row in payload.get("organic_results", []) or []:
@@ -107,7 +104,7 @@ class GooglePatentsConnector(SourceConnector):
                         "assignee": assignee,
                         "patent_number": pub_num,
                         "filing_date": row.get("filing_date", ""),
-                        "inventors": row.get("inventor", ""),
+                        "inventors": unescape(row.get("inventor", "") or ""),
                         "competitor_match": _match_competitor(assignee, q.competitors),
                     },
                 )
