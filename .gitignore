@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Env / secrets
+.env
+.env.local
+*.env
+!.env.example
+
+# Data
+*.db
+*.sqlite
+*.sqlite3
+backend/data/
+backend/exports/
+
+# Node
+node_modules/
+.next/
+out/
+.vercel/
+*.tsbuildinfo
+next-env.d.ts
+
+# OS / editor
+.DS_Store
+.idea/
+*.swp
