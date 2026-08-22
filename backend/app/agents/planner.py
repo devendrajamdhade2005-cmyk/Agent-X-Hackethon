@@ -19,7 +19,7 @@ from .llm import LLMClient, clamp_int, coerce_str_list
 from .sanitize import sanitize
 from .state import InformationNeed, Plan
 
-VALID_NEEDS = ("research", "news", "competitor", "patent")
+VALID_NEEDS = ("research", "news", "web", "competitor", "patent")
 
 # ── intent lexicons ─────────────────────────────────────────
 _RESEARCH_HINTS = (
@@ -40,6 +40,17 @@ _NEWS_HINTS = (
     "news", "industry", "market", "launch", "launches", "announcement",
     "announcements", "funding", "raise", "partnership", "acquisition",
     "regulation", "regulatory", "adoption", "commercial", "product",
+)
+# Signals that the goal needs the live open web rather than curated feeds or
+# academic indexes: recency language, corporate activity, or an explicit ask.
+_WEB_HINTS = (
+    "web", "online", "internet", "current", "currently", "recent", "recently",
+    "latest", "today", "this week", "right now", "up to date", "up-to-date",
+    "real time", "real-time", "live", "happening",
+    "announcement", "announcements", "announced", "press release", "blog",
+    "launch", "launches", "launched", "funding", "raised", "acquisition",
+    "partnership", "hiring", "roadmap", "pricing", "customers", "strategy",
+    "competitor", "competitors", "competitive", "rival", "rivals", "company",
 )
 
 _STOPWORDS = {
@@ -232,10 +243,13 @@ class Planner:
         wants_patent = _hit(text, _PATENT_HINTS)
         wants_news = _hit(text, _NEWS_HINTS)
         wants_competitor = bool(competitors) or _hit(text, _COMPETITOR_HINTS)
+        # Live web search earns a required slot when the goal is about current
+        # real-world activity — named companies, announcements, or recency language.
+        wants_web = bool(competitors) or _hit(text, _WEB_HINTS)
 
         # A goal with no explicit lean still needs a starting point: research plus
         # news is the widest-coverage, lowest-assumption opening.
-        if not any((wants_research, wants_patent, wants_news, wants_competitor)):
+        if not any((wants_research, wants_patent, wants_news, wants_competitor, wants_web)):
             wants_research = wants_news = True
 
         needs: list[InformationNeed] = []
@@ -257,6 +271,23 @@ class Planner:
                     min_items=2,
                 )
             )
+        needs.append(
+            InformationNeed(
+                key="web",
+                reason=(
+                    (
+                        f"the goal concerns current real-world activity"
+                        + (f" for {', '.join(competitors[:3])}" if competitors else "")
+                        + " — live web search covers announcements the curated feeds miss"
+                    )
+                    if wants_web
+                    else "held back — only worth a live web search if the other sources "
+                    "come back thin or a company needs verifying"
+                ),
+                required=wants_web,
+                min_items=2,
+            )
+        )
         if wants_competitor:
             needs.append(
                 InformationNeed(
@@ -291,6 +322,7 @@ class Planner:
         opening = {
             "research": "start with research — papers lead announcements by months",
             "news": "start with industry news to establish current market state",
+            "web": "start with a live web search to establish what has actually happened recently",
             "competitor": "start with the named competitors, since they define the goal",
             "patent": "start with patents, since the goal is explicitly about IP",
         }[first]

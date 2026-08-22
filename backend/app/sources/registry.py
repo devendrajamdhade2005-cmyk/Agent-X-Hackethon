@@ -12,11 +12,18 @@ import httpx
 
 from ..config import Settings, settings as default_settings
 from .base import SourceConnector
-from .news import GNewsConnector, HackerNewsConnector, NewsApiConnector, RssConnector
+from .news import (
+    GNewsConnector,
+    HackerNewsConnector,
+    NewsApiConnector,
+    NewsDataConnector,
+    RssConnector,
+)
 from .patents import GooglePatentsConnector, PatentsViewConnector
 from .repos import GitHubConnector
 from .research import ArxivConnector, OpenAlexConnector, SemanticScholarConnector
 from .social import RedditConnector
+from .web import TavilyConnector
 
 CONNECTOR_CLASSES: list[type[SourceConnector]] = [
     ArxivConnector,
@@ -26,10 +33,12 @@ CONNECTOR_CLASSES: list[type[SourceConnector]] = [
     GooglePatentsConnector,
     NewsApiConnector,
     GNewsConnector,
+    NewsDataConnector,
     RssConnector,
     HackerNewsConnector,
     RedditConnector,
     GitHubConnector,
+    TavilyConnector,
 ]
 
 # Order matters: within a source type the agent prefers the earlier entries and
@@ -37,9 +46,10 @@ CONNECTOR_CLASSES: list[type[SourceConnector]] = [
 PREFERENCE: dict[str, list[str]] = {
     "research": ["arxiv", "openalex", "semantic_scholar"],
     "patent": ["patentsview", "serpapi"],
-    "news": ["rss", "hackernews", "newsapi", "gnews"],
+    "news": ["rss", "hackernews", "newsapi", "newsdata", "gnews"],
     "social": ["reddit"],
     "repo": ["github"],
+    "web": ["tavily"],
 }
 
 

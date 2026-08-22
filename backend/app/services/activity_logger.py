@@ -23,6 +23,9 @@ Phase = Literal[
     "start",
     "goal",
     "plan",
+    "orchestration",
+    "delegation",
+    "collaboration",
     "thought",
     "action",
     "observation",
@@ -34,8 +37,31 @@ Phase = Literal[
     "done",
 ]
 
+# Judged event taxonomy (§ activity log): ORCHESTRATION, DELEGATION, TOOL_CALL,
+# OBSERVATION, COLLABORATION, RESULT, ERROR.
+EVENT_TYPES: dict[str, str] = {
+    "start": "ORCHESTRATION",
+    "goal": "ORCHESTRATION",
+    "plan": "ORCHESTRATION",
+    "orchestration": "ORCHESTRATION",
+    "delegation": "DELEGATION",
+    "decision": "ORCHESTRATION",
+    "action": "TOOL_CALL",
+    "observation": "OBSERVATION",
+    "thought": "OBSERVATION",
+    "collaboration": "COLLABORATION",
+    "insight": "RESULT",
+    "final": "RESULT",
+    "done": "RESULT",
+    "warning": "ERROR",
+    "error": "ERROR",
+}
+
 ICONS: dict[str, str] = {
     "start": "🤖",
+    "orchestration": "🧭",
+    "delegation": "📤",
+    "collaboration": "🔄",
     "goal": "🎯",
     "plan": "🧠",
     "thought": "🧠",
@@ -51,6 +77,9 @@ ICONS: dict[str, str] = {
 
 LABELS: dict[str, str] = {
     "start": "Agent started",
+    "orchestration": "Orchestration",
+    "delegation": "Delegation",
+    "collaboration": "Collaboration",
     "goal": "Goal understood",
     "plan": "Planning",
     "thought": "Reasoning",
@@ -75,6 +104,7 @@ class ActivityEntry:
     elapsed_ms: int = 0
     data: dict[str, Any] = field(default_factory=dict)
     ts: str = ""
+    agent: str = ""
 
     @property
     def icon(self) -> str:
@@ -86,6 +116,8 @@ class ActivityEntry:
             "phase": self.phase,
             "icon": self.icon,
             "label": LABELS.get(self.phase, self.phase.title()),
+            "event_type": EVENT_TYPES.get(self.phase, "RESULT"),
+            "agent": self.agent,
             "title": self.title,
             "detail": self.detail,
             "iteration": self.iteration,
@@ -123,6 +155,11 @@ class ActivityLogger:
         self._queue = queue
         self._echo = echo
         self._t0 = time.perf_counter()
+        self._agent = ""
+
+    def speaking_as(self, agent: str) -> None:
+        """Attribute subsequent entries to this agent (orchestrator or specialist)."""
+        self._agent = agent or ""
 
     # ── core ────────────────────────────────────────────────
     def log(
@@ -144,6 +181,7 @@ class ActivityLogger:
             elapsed_ms=int((time.perf_counter() - self._t0) * 1000),
             data=data,
             ts=datetime.now(UTC).isoformat(timespec="milliseconds"),
+            agent=str(data.pop("agent", "") or self._agent),
         )
         self.entries.append(entry)
 
@@ -194,6 +232,15 @@ class ActivityLogger:
 
     def final(self, title: str, detail: str = "", **kw: Any) -> ActivityEntry:
         return self.log("final", title, detail, **kw)
+
+    def orchestration(self, title: str, detail: str = "", **kw: Any) -> ActivityEntry:
+        return self.log("orchestration", title, detail, **kw)
+
+    def delegation(self, title: str, detail: str = "", **kw: Any) -> ActivityEntry:
+        return self.log("delegation", title, detail, **kw)
+
+    def collaboration(self, title: str, detail: str = "", **kw: Any) -> ActivityEntry:
+        return self.log("collaboration", title, detail, **kw)
 
     def done(self, title: str = "Task completed", detail: str = "", **kw: Any) -> ActivityEntry:
         return self.log("done", title, detail, **kw)

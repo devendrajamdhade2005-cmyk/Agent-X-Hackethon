@@ -36,6 +36,7 @@ _SOURCE_WORDS = {
     "research": "A research paper",
     "patent": "A patent filing",
     "news": "An industry news report",
+    "web": "A live web source",
     "competitor": "A tracked competitor",
 }
 
@@ -43,6 +44,7 @@ _ACTION_TEMPLATES = {
     "research": "Have an engineer review the method and assess whether it changes our technical roadmap.",
     "patent": "Ask IP counsel to review the claims for overlap with our own approach and freedom to operate.",
     "news": "Add this to the market brief and confirm whether it changes near-term positioning.",
+    "web": "Verify the claim at the source and add it to the competitive brief.",
     "competitor": "Compare the announced capability against our current offering and note the gap.",
 }
 
@@ -346,6 +348,10 @@ class InsightGenerator:
 
         if f.source == "patent":
             reasons.append("patent activity indicates where a company is locking in position")
+        elif f.source == "web":
+            reasons.append(
+                "it was found by live web search, so it reflects the current public record"
+            )
         elif f.source == "research":
             citations = int(f.meta.get("citation_count") or 0)
             reasons.append(
@@ -536,6 +542,7 @@ def _source_name(f: FindingRecord) -> str:
         "research": "Research",
         "patent": "Patent",
         "news": "News",
+        "web": "Web",
         "competitor": "Competitor activity",
     }.get(f.source, f.source.title())
     return f"{label} · {f.provider}" if f.provider else label

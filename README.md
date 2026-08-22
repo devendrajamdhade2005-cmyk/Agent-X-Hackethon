@@ -1,6 +1,8 @@
-# 🔍 InsightPulse — Autonomous Research & Competitor Intelligence Agent
+# 🔍 InsightPulse AI — Autonomous Research & Competitor Intelligence Agent
 
-> An autonomous AI agent that continuously monitors research publications, patents, competitor activities, and industry news — then delivers concise, actionable insights in real time.
+> An autonomous AI agent that gathers intelligence from research papers, patents, competitor
+> activity, industry news and the live web — reasons about what it finds, and delivers a
+> prioritized, actionable briefing with a downloadable report.
 
 ---
 
@@ -8,258 +10,344 @@
 
 - Akash Pingale
 - Devendra Jamdhade
-- shubham paithankar
-- gaurav bodkhe
-- shubham sonwane
-
+- Shubham Paithankar
+- Gaurav Bodkhe
+- Shubham Sonwane
 
 ---
 
 ## 📌 Problem Statement
 
-Organizations, startups, and research institutions operate in highly competitive and rapidly evolving environments where staying updated on research trends, patent developments, competitor strategies, and industry news is critical. However, manually monitoring scientific publications, patent databases, news platforms, and social media sources is time-consuming, inefficient, and prone to missing important updates. The lack of timely insights can result in lost opportunities, delayed innovation, and weakened competitive positioning.
+Organizations, startups and research institutions operate in highly competitive and rapidly
+evolving environments where staying updated on research trends, patent developments, competitor
+strategies and industry news is critical. Manually monitoring scientific publications, patent
+databases, news platforms and social sources is time-consuming, inefficient and prone to missing
+important updates.
 
-Therefore, there is a need for an **autonomous AI agent** capable of continuously tracking research and competitor activities, analyzing vast information sources, and delivering concise, actionable insights in real time.
+InsightPulse is an **autonomous AI agent** that continuously tracks research and competitor
+activity, analyses many information sources, and delivers concise, actionable insights.
 
 ---
 
-## 📖 Project Description
+## ⚡ Quick start
 
-**InsightPulse** is a fully autonomous AI agent built on a LangGraph-powered agentic loop that continuously gathers intelligence from multiple sources — research papers (arXiv, Semantic Scholar), patent databases, industry news (NewsAPI), and social signals (Reddit) — and converts raw data into prioritized, plain-language insights.
+No API keys are required. With zero configuration the agent runs end to end, clearly labelling
+which data is live and which is simulated.
 
-Unlike a basic search tool or information aggregator, InsightPulse exhibits genuine agentic behavior across all 6 required components:
+```bash
+cd backend
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m uvicorn app.main:app --port 8000
+```
 
-| Agentic Component | Implementation |
+Open **http://localhost:8000**, then press **Run Intelligence Scan**.
+
+| URL | What it is |
 |---|---|
-| **Goal** | User defines a Tracking Profile: keywords, competitor names, source types, priority threshold |
-| **Reasoning** | Claude LLM scores each finding for novelty, relevance, and strategic significance |
-| **Planning** | Planner step breaks one Tracking Profile into a concrete per-source query plan |
-| **Tools** | arXiv API, Semantic Scholar, Patents Search, NewsAPI, RSS, Reddit API |
-| **Memory** | Vector store (Chroma) + PostgreSQL — deduplicates findings, tracks what's been seen |
-| **Action** | Writes insights to DB, updates live dashboard via WebSocket, sends alerts when threshold is met |
+| `http://localhost:8000` | Intelligence dashboard |
+| `http://localhost:8000/docs` | OpenAPI / Swagger |
+| `http://localhost:8000/health` | Capability report — which reasoner and sources are live |
+
+Optional keys go in `backend/.env` (see `backend/.env.example`, which documents every one and
+where to get it free).
 
 ---
 
-## ✅ Build Status
+## 🧠 How the agent works — a real ReAct loop
 
-> **Legend:** ✅ Complete · 🚧 In Progress · ❌ Not Started · ⚠️ Partial / Broken
+```
+GOAL → REASON → DECIDE NEXT ACTION → SELECT TOOL → CALL TOOL
+                        ↑                                │
+                        └──── ANALYZE ←── OBSERVE ───────┘
+                                   │
+                        enough evidence? → PRIORITIZED INSIGHTS
+```
 
-### 🏗️ Foundation
+This is **not** a fixed pipeline. The agent chooses each next action from its current state, and
+the same goal can produce different tool sequences depending on what earlier calls returned.
 
-| Component | Status | Notes |
-|---|---|---|
-| Project setup / repo structure | 🚧 | — |
-| Backend — FastAPI skeleton | 🚧 | — |
-| Frontend — Next.js dashboard UI | 🚧 | — |
-| PostgreSQL DB schema + models | 🚧 | — |
-| Environment / API key config | 🚧 | — |
+Proven by the test suite:
 
-### 🔌 Data Source Integrations
-
-| Integration | Status | Notes |
-|---|---|---|
-| arXiv API | 🚧 | — |
-| Semantic Scholar API | 🚧 | — |
-| NewsAPI / RSS feeds | 🚧 | — |
-| Reddit API (via PRAW) | 🚧 | — |
-| Patents search (SerpAPI / Lens.org) | 🚧 | — |
-
-### 🤖 Agent Core
-
-| Component | Status | Notes |
-|---|---|---|
-| LangGraph agent loop (Planner → Tools → Reasoning → Action) | 🚧 | — |
-| Claude LLM relevance scoring | 🚧 | — |
-| Chroma vector memory + deduplication | 🚧 | — |
-| APScheduler autonomous runs | 🚧 | — |
-
-### 📊 Dashboard & Delivery
-
-| Feature | Status | Notes |
-|---|---|---|
-| Live insight feed (WebSocket updates) | 🚧 | — |
-| Insight cards with score + reasoning | 🚧 | — |
-| Competitor activity timeline | 🚧 | — |
-| Agent Activity Log (live, human-readable) | 🚧 | — |
-| Digest generator (daily/weekly PDF/MD) | 🚧 | — |
-| In-app alerts | 🚧 | — |
-| Email alerts | 🚧 | — |
-
-### 🚀 Deployment
-
-| Component | Status | Notes |
-|---|---|---|
-| Frontend — Vercel | 🚧 | — |
-| Backend — Render / Railway | 🚧 | — |
-| Live URL accessible | 🚧 | — |
-
-> **How to update this table:** As each item is completed, change 🚧 to ✅. If something is broken or skipped, mark ❌ or ⚠️ and add a short note.
-
----
-
-## ⚙️ Technologies Used
-
-| Layer | Technology |
+| Goal | Tool sequence chosen |
 |---|---|
-| **Frontend** | Next.js + TypeScript + Tailwind CSS |
-| **Backend** | Python 3.11 + FastAPI |
-| **Agent Orchestration** | LangGraph |
-| **LLM / AI** | Claude (Anthropic API) |
-| **Scheduler** | APScheduler |
-| **Database** | PostgreSQL (Supabase / Neon) |
-| **Vector Memory** | Chroma |
-| **Real-time Updates** | WebSockets (FastAPI native) |
-| **Research Sources** | arXiv API, Semantic Scholar API |
-| **Patent Sources** | Google Patents via SerpAPI, Lens.org |
-| **News Sources** | NewsAPI, GNews, Curated RSS |
-| **Social Signals** | Reddit API (via PRAW) |
-| **Hosting** | Vercel (frontend) + Render / Railway (backend) |
+| "Track research developments in AI agents" | `research_search` |
+| "Monitor patents related to generative AI" | `patent_search` |
+| "Monitor industry news about solid-state batteries" | `news_search` |
+| "Track competitor announcements from OpenAI and Anthropic" | `web_search → competitor_search → news_search` |
+| "Track AI agent research, patents and competitor moves" | `web_search → competitor_search → patent_search → research_search → news_search` |
+
+A tool can also be pulled in **mid-run by an observation** rather than by the goal text. For
+example, live web search is held back until one of these happens:
+
+1. another tool returned a `thin` / `empty` result
+2. a market signal (launch, funding, acquisition, partnership, regulatory) needs corroborating
+3. a tracked company still has zero coverage
+4. total relevant evidence is below the reporting threshold
+
+### The 6 agentic components
+
+| Component | Implementation | File |
+|---|---|---|
+| **Goal** | Natural-language tracking goal → structured information needs | `app/agents/planner.py` |
+| **Planning** | Declares *what must be learned*, marks needs required vs. conditional | `app/agents/planner.py` |
+| **Reasoning** | Scores relevance, novelty and strategic significance; writes the justification | `app/agents/decision_engine.py` |
+| **Tools** | 5 tools over 12 providers, behind one interface with retry + circuit breaker | `app/tools/`, `app/sources/` |
+| **Memory** | Per-run dedup (URL identity → normalized-title fingerprint), coverage and signal tracking | `app/agents/state.py` |
+| **Action** | Prioritized insights, executive summary, downloadable intelligence report | `app/agents/insight_generator.py`, `app/reports/` |
 
 ---
 
-## ✨ Features
+## 👥 Multi-agent architecture
 
-- 🔍 **Research Tracking** — Fetches and summarizes new papers from arXiv and Semantic Scholar based on tracked topics.
-- 📜 **Patent Tracking** — Monitors patent filings and flags when a tracked competitor appears as an assignee.
-- 🏢 **Competitor Tracker** — Maintains a per-competitor activity timeline across news, patents, and web sources.
-- 📰 **News Monitoring** — Pulls relevant industry news and scores articles for relevance before surfacing them.
-- 🤖 **AI Summarization** — Every finding gets a plain-language 2–3 sentence summary and a "why this matters" line.
-- 🧠 **Relevance Scoring** — Claude scores each finding High / Medium / Low with a one-sentence reasoning shown to the user.
-- 🔁 **Autonomous Loop** — Runs on a configurable schedule without manual triggers.
-- 🚨 **Alerts** — In-app and email notifications when a High-priority finding is detected.
-- 📊 **Digest Generator** — Compiles a daily/weekly summary of top insights, exportable as PDF or Markdown.
-- 🪵 **Agent Activity Log** — Live, human-readable log of every step the agent takes per run.
-- 🔄 **Deduplication** — Vector-embedding-based memory prevents re-alerting on already-seen findings.
+The loop above runs **inside specialist agents** coordinated by an orchestrator. Specialisation is
+structural, not cosmetic: each specialist is scoped to a **disjoint** set of tools, so it physically
+cannot do the other's job.
+
+| Agent | Owns | Tools | Answers |
+|---|---|---|---|
+| 🧠 **Intelligence Orchestrator** | Decomposition, delegation, consolidation | — (no tools) | *Who should work on this, and what does it all mean together?* |
+| 🔬 **Research Intelligence Agent** | Academic + IP evidence | `research_search`, `patent_search` | *What is technically real and who filed it?* |
+| 🏢 **Competitive Intelligence Agent** | Market + company activity | `competitor_search`, `news_search`, `web_search` | *What are competitors actually shipping?* |
+
+```
+GOAL → ORCHESTRATOR decomposes into information needs
+         │
+         ├─ needs research/patent?   → DELEGATE 🔬 Research Agent      → its own ReAct loop
+         ├─ needs competitor/news/web? → DELEGATE 🏢 Competitive Agent → its own ReAct loop
+         │                                        │
+         │        ← recommends a follow-up need ──┘
+         ↓
+       CONSOLIDATE → cross-agent corroboration + handoffs → PRIORITIZED INSIGHTS
+```
+
+**The orchestrator only recruits agents it needs.** A patents-only goal never wakes the
+Competitive Agent, so no Tavily call and no competitor sweep happens. Selection is gated on
+`research_led` / `market_led` / `company_scoped` intent, and every SELECTED/SKIPPED decision is
+written to the activity log with its reason.
+
+**Agents genuinely collaborate**, in two modes:
+
+| Mode | Trigger | Effect |
+|---|---|---|
+| `corroboration` | Both agents surface the *same event* — shared company or market signal **and** ≥34% title-token overlap | Confidence boost, both source URLs retained, finding marked `corroborated_by` |
+| `handoff` | A competitive signal is topically backed by the other agent's technical evidence | Findings linked, no confidence boost |
+
+Every finding carries `discovered_by`, so attribution survives into the API, the dashboard and the
+PDF. The activity log is tagged per agent and per event type — `ORCHESTRATION`, `DELEGATION`,
+`TOOL_CALL`, `OBSERVATION`, `COLLABORATION`, `RESULT`, `ERROR` — so you can watch the handoffs live.
+
+Built with **no agent framework**. No LangGraph, no CrewAI: the orchestrator is ~500 readable lines,
+adds zero dependencies, and streams every state transition instead of hiding it.
 
 ---
 
-## 🚀 Installation & Setup
+## 🛠 Intelligence tools
 
-### Prerequisites
+| Tool | Providers | When the agent picks it |
+|---|---|---|
+| **Research Search** | arXiv, OpenAlex, Semantic Scholar | Scientific/technical progress, new methods, benchmarks |
+| **Patent Search** | PatentsView (USPTO), Google Patents | IP posture; competitor-owned filings are flagged |
+| **Industry News** | Curated RSS (tier-1), Hacker News, NewsAPI, NewsData.io, GNews | Market context, launches, funding |
+| **Competitor Intelligence** | RSS, Hacker News, GitHub, Reddit, NewsAPI, NewsData.io, GNews | Named-company activity, per company |
+| **Live Web Intelligence** | Tavily | Current announcements the curated feeds miss |
 
-- Node.js 18+
-- Python 3.11+
-- PostgreSQL database (Supabase or Neon recommended)
-- Git
+### Live with no key
 
-### 1. Clone the Repository
+`arXiv` · `OpenAlex` · `curated RSS` · `Hacker News` · `GitHub`
 
-```bash
-git clone https://github.com/<your-username>/insightpulse.git
-cd insightpulse
-```
+### Needs a free key (otherwise clearly labelled `SIMULATED`)
 
-### 2. Set Up the Backend
-
-```bash
-cd backend
-python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-### 3. Configure Environment Variables
-
-Create a `.env` file inside `backend/` using the template below:
-
-```env
-# Anthropic
-ANTHROPIC_API_KEY=your_anthropic_api_key
-
-# Database
-DATABASE_URL=postgresql://user:password@host:5432/insightpulse
-
-# Semantic Scholar
-SEMANTIC_SCHOLAR_API_KEY=your_semantic_scholar_key
-
-# News
-NEWS_API_KEY=your_newsapi_key
-
-# Reddit (via PRAW)
-REDDIT_CLIENT_ID=your_reddit_client_id
-REDDIT_CLIENT_SECRET=your_reddit_client_secret
-REDDIT_USER_AGENT=InsightPulse/1.0
-
-# Patents (SerpAPI)
-SERP_API_KEY=your_serpapi_key
-
-# Optional: Email alerts
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=your_email@gmail.com
-SMTP_PASS=your_app_password
-```
-
-> ⚠️ Never commit your `.env` file. It is already listed in `.gitignore`.
-
-### 4. Initialize the Database
-
-```bash
-cd backend
-alembic upgrade head
-```
-
-### 5. Set Up the Frontend
-
-```bash
-cd ../frontend
-npm install
-```
-
-Create a `.env.local` file inside `frontend/`:
-
-```env
-NEXT_PUBLIC_API_URL=http://localhost:8000
-```
+| Key | Get it free | Unlocks |
+|---|---|---|
+| `PATENTSVIEW_API_KEY` | [patentsview.org/apis/keyrequest](https://patentsview.org/apis/keyrequest) | Real USPTO patent data |
+| `SEMANTIC_SCHOLAR_API_KEY` | [semanticscholar.org/product/api](https://www.semanticscholar.org/product/api#api-key-form) | Citation counts, venues, institutions |
+| `TAVILY_API_KEY` | [app.tavily.com](https://app.tavily.com) | Live open-web search |
+| `NEWSAPI_KEY` | [newsapi.org/register](https://newsapi.org/register) | Broad news coverage (~1 month of history on the free plan) |
+| `NEWSDATA_API_KEY` | [newsdata.io/register](https://newsdata.io/register) | Global news across ~80k sources, 200+ countries |
+| `GEMINI_API_KEY` | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | LLM reasoning (see below) |
 
 ---
 
-## ▶️ How to Run the Project
+## 🤖 Reasoning engine
 
-### Start the Backend
+Primary is **Google Gemini** (`gemini-3.5-flash`), called over plain HTTPS with native JSON
+output. The client verifies the credential on boot, fails over between models, and respects
+per-call and per-run latency budgets.
 
-```bash
-cd backend
-source venv/bin/activate
-uvicorn main:app --reload --port 8000
-```
+**If no model is available the agent still reasons.** A deterministic rule-based reasoner takes
+over planning, tool selection and prioritization, and the UI and report say so explicitly:
 
-### Start the Frontend (new terminal)
+> ⚠️ LLM unavailable → continuing with the heuristic reasoner
 
-```bash
-cd frontend
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000) in your browser.
-
-### Using the App
-
-1. **Create a Tracking Profile** — Go to *Tracking Profiles* → *New Profile*. Enter topic keywords and competitor names.
-2. **Run the Agent** — Click *Run Now*, or wait for the scheduled autonomous run.
-3. **View Insights** — Dashboard live-updates with new insight cards as the agent processes findings.
-4. **Check the Agent Log** — Open *Agent Activity Log* to see every step the agent took in plain language.
-5. **Set Up Alerts** — Go to *Settings* → *Alerts* to enable email notifications for High-priority findings.
+The system never claims a model was involved when it wasn't.
 
 ---
 
-## 🗂️ Project Structure
+## 📊 Dashboard
+
+Every figure is computed from the actual run — nothing is hardcoded. Where a metric cannot be
+derived, the UI shows a limited-data state rather than a fabricated number.
+
+| Panel | Derived from |
+|---|---|
+| KPI cards | finding counts, mean relevance, competitive signals (deltas vs. previous scan, else `—`) |
+| Intelligence Activity chart | findings bucketed by real publication date |
+| Emerging Topics | detected signals + recurring title phrases; growth = recent vs. earlier half |
+| Sources & Coverage | grouped by real provider, with live/simulated split |
+| Connected Intelligence | genuine cross-source chains sharing a company or signal |
+| Competitor Intelligence | per-company activity by source type |
+| Top Contributors | author/assignee + citation counts, flagged when the source was simulated |
+
+Sections: **Overview · Research · Competitors · Patents · News · Insights · Reports** —
+client-side views over one run, so navigation never refetches or re-runs the agent.
+
+**How the AI Agent Worked** is one click away on the dashboard: the full decision trail
+(goal → plan → decision → tool → observation → analysis → …), with iteration counts, tool
+inputs and timings behind *Show technical details*.
+
+---
+
+## 📄 Intelligence Report
+
+Built from the completed run — no searches are repeated to produce a document.
+
+- **PDF** — 13–16 pages, server-generated (ReportLab), A4, page numbers, light print theme
+- **HTML preview** — in-app, print-ready
+- **Markdown** and **JSON** exports
+
+Seven sections: Executive Summary · Prioritized Insights · **Agent Contributions** ·
+Agent Execution Summary · Detailed Findings · Sources & Coverage · Limitations & Caveats.
+
+*Agent Contributions* documents the orchestrator's agent-selection reasoning (including which
+agents were **skipped** and why), each specialist's tools, providers, coverage and confidence, and
+every cross-agent collaboration event.
+
+**Source provenance is auditable.** Each insight leads with the actual publisher
+(`wsj.com — retrieved via Tavily Web Search`), and Sources & Coverage lists every provider's
+operator, access model, exact API endpoint and the real domains harvested.
+
+---
+
+## 🔌 API
 
 ```
-insightpulse/
-├── backend/
-│   ├── agents/            # LangGraph agent graph (planner, tools, reasoning, action nodes)
-│   ├── tools/             # Individual tool wrappers: arxiv, news, patents, reddit
-│   ├── models/            # SQLAlchemy DB models
-│   ├── routers/           # FastAPI route handlers
-│   ├── scheduler.py       # APScheduler autonomous run loop
-│   ├── memory.py          # Chroma vector store for dedup
-│   └── main.py            # FastAPI app entrypoint
-├── frontend/
-│   ├── app/               # Next.js app directory
-│   ├── components/        # Dashboard, InsightCard, AgentLog, etc.
-│   └── lib/               # API client, WebSocket hooks
-├── .env.example
-└── README.md
+POST /api/agent/run              run the loop, return the full result
+POST /api/agent/run/stream       same, streaming the activity log (SSE)
+GET  /api/agent/tools            tool catalog + provider health
+GET  /api/agent/runs             recent runs
+POST /api/report/generate        build a report from a finished run
+GET  /api/report/{id}/preview    print-ready HTML
+GET  /api/report/{id}/download/{pdf|md|json}
+GET  /health                     capability report
 ```
 
+```bash
+curl -X POST http://localhost:8000/api/agent/run \
+  -H 'Content-Type: application/json' \
+  -d '{"goal":"Track AI agents and monitor OpenAI and Anthropic",
+       "keywords":["AI agents"],"competitors":["OpenAI","Anthropic"]}'
+```
+
+`AGENT_API_TOKEN` is unset by default so the local demo needs no setup. **Set it before exposing
+this service on a network** — the run endpoint spends API quota and makes outbound requests.
+
+---
+
+## 🧱 Architecture
+
+```
+backend/
+├── main.py                    entry point
+├── app/
+│   ├── main.py                FastAPI app, static hosting
+│   ├── config.py              settings; every key optional
+│   ├── security.py            input sanitisation, SSRF guard
+│   ├── api/
+│   │   ├── agent.py           run / stream / tools / runs
+│   │   └── report.py          generate / preview / download
+│   ├── agents/
+│   │   ├── agent.py           host: ReAct primitives + run lifecycle
+│   │   ├── orchestrator.py    agent selection, delegation, consolidation
+│   │   ├── specialists.py     Research + Competitive agents (scoped tools)
+│   │   ├── messages.py        inter-agent message + collaboration types
+│   │   ├── planner.py         goal → information needs
+│   │   ├── decision_engine.py next-action policy + observation analysis
+│   │   ├── insight_generator.py  prioritized insights + summary
+│   │   ├── llm.py             Gemini/Anthropic + deterministic fallback
+│   │   ├── sanitize.py        prompt-injection defence
+│   │   └── state.py           shared agent state
+│   ├── tools/                 5 tools + shared signal detection
+│   ├── sources/               12 providers + retry/breaker/simulation
+│   ├── reports/               builder, HTML, PDF, Markdown
+│   └── services/              activity logger (per-agent, typed events)
+├── static/                    dashboard (vanilla ES modules, no build step)
+└── tests/                     72 tests
+```
+
+**Stack:** Python 3.11+ · FastAPI · httpx · ReportLab · vanilla ES modules + hand-rolled SVG
+charts. No build step, no frontend framework — the page loads instantly and streaming updates
+touch only three DOM nodes.
+
+---
+
+## 🛡 Reliability & safety
+
+- **One failing provider never fails a run.** Per-source retry with jittered backoff, circuit
+  breaker, token-bucket rate limiting; degradation is reported in the activity log.
+- **Iteration cap** (default 10) with a safe partial summary instead of a crash.
+- **Prompt-injection defence** — ingested third-party text is sanitised, delimited and labelled
+  as data; a finding containing *"ignore previous instructions"* cannot alter scoring.
+- **Credibility ceiling** — unverified forum content can never be rated HIGH on its own.
+- **HIGH is scarce** — capped so the priority column carries information.
+- **Simulated data is always labelled**, in the UI and in every export.
+- **Aggregator noise is filtered at ingestion.** Broad news APIs answer technical queries with
+  package-registry pages (`pypi.org/project/agent2win`), job listings and course pages; those are
+  dropped rather than down-ranked. Redirect wrappers such as `news.google.com/rss/articles/<blob>`
+  are dropped too, since an opaque redirect cannot be cited as a source.
+- **Syndication-aware dedup.** Beyond URL identity and a normalized-title fingerprint, a third
+  stage compares the opening tokens of a headline, which collapses the same wire story
+  republished as `"<headline> - The New York Times"`.
+
+---
+
+## ✅ Test suite
+
+```bash
+cd backend && .venv/bin/python -m pytest tests/ -q
+# 72 passed
+```
+
+Covers goal→plan, dynamic tool selection per goal, observation-driven adaptation, self-termination,
+iteration cap, tool-failure containment, dedup, priority bands, the credibility ceiling,
+prompt-injection resistance, metric consistency, and the Tavily gating rules.
+
+The multi-agent suite (`tests/test_multi_agent.py`, 28 tests) additionally proves tool scoping is
+disjoint and enforced, that a research-only goal never recruits the Competitive Agent, that a
+patents-only goal triggers no Tavily call, that both agents are recruited for a mixed goal, that
+corroboration requires a genuinely shared event, that findings carry `discovered_by`, that one
+specialist failing does not abort the run, and that the pre-existing single-agent result shape is
+unchanged.
+
+---
+
+## 📋 Build status
+
+| Area | Status |
+|---|---|
+| ReAct agent loop (plan → decide → act → observe → analyze → repeat) | ✅ |
+| Multi-agent orchestration — 3 agents, scoped tools, real delegation | ✅ |
+| Cross-agent collaboration (corroboration + handoff) with per-finding attribution | ✅ |
+| Dynamic tool selection, verified per goal | ✅ |
+| 5 tools over 12 providers | ✅ |
+| Gemini reasoning + deterministic fallback | ✅ |
+| Graceful provider degradation + circuit breakers | ✅ |
+| Prioritized insights (what happened / why it matters / action) | ✅ |
+| Live activity streaming (SSE) | ✅ |
+| Intelligence dashboard with derived analytics | ✅ |
+| Intelligence Report — PDF / HTML / Markdown / JSON | ✅ |
+| Source provenance auditing | ✅ |
+| 72 automated tests | ✅ |
+| Public deployment | ❌ not yet — runs locally |
+| Scheduled autonomous re-runs | ❌ out of scope for the current tasks |
+| Multi-user accounts / persistence | ❌ runs are held in memory |

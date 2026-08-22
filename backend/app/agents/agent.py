@@ -39,6 +39,8 @@ from .decision_engine import (
     ObservationAnalyzer,
 )
 from .insight_generator import HIGH, LOW, MEDIUM, InsightGenerator, SummaryWriter
+from .messages import PROFILES
+from .orchestrator import IntelligenceOrchestrator
 from .llm import LLMClient
 from .planner import Planner
 from .state import MAX_ITERATIONS, AgentState, Decision, ToolCallRecord
@@ -66,6 +68,9 @@ class AgentRunResult:
     summary: str
     state: dict[str, Any]
     metrics: dict[str, Any]
+    execution_plan: list[dict[str, Any]] = field(default_factory=list)
+    agents: list[dict[str, Any]] = field(default_factory=list)
+    collaboration_events: list[dict[str, Any]] = field(default_factory=list)
     activity_text: str = ""
     insights_text: str = ""
 
@@ -81,6 +86,9 @@ class AgentRunResult:
             "summary": self.summary,
             "state": self.state,
             "metrics": self.metrics,
+            "execution_plan": self.execution_plan,
+            "agents": self.agents,
+            "collaboration_events": self.collaboration_events,
             "activity_text": self.activity_text,
             "insights_text": self.insights_text,
         }
@@ -114,6 +122,7 @@ class InsightPulseAgent:
         self.analyzer = ObservationAnalyzer()
         self.insight_writer = InsightGenerator(self.llm)
         self.summary_writer = SummaryWriter(self.llm)
+        self.orchestrator = IntelligenceOrchestrator()
 
     # ─────────────────────────────────────────────────────────
     # Entry point
@@ -143,7 +152,7 @@ class InsightPulseAgent:
                 )
                 await self._understand_goal(request)
                 await self._plan()
-                await self._loop(ctx)
+                await self._orchestrate(ctx)
                 await self._finalize()
         except asyncio.CancelledError:
             state.status = "failed"
@@ -305,9 +314,59 @@ class InsightPulseAgent:
                 )
 
     # ─────────────────────────────────────────────────────────
-    # 3-8. THE LOOP
+    # 3-8. MULTI-AGENT EXECUTION
     # ─────────────────────────────────────────────────────────
+    async def _orchestrate(self, ctx: ToolContext) -> None:
+        """Hand collection to the orchestrator, which delegates to the specialists.
+
+        The orchestrator owns *who* works and *in what order*; each specialist owns
+        *which of its own tools* to reach for. Both write into this shared state, so
+        dedup, scoring and the activity log stay single-sourced.
+        """
+        state = self.state
+        state.status = "running"
+        state.current_step = "decide"
+
+        try:
+            await self.orchestrator.run(self, ctx)
+        except Exception as exc:  # noqa: BLE001 — orchestration must not end the run
+            state.record_error("orchestrator", f"{type(exc).__name__}: {exc}")
+            self.logger.error(
+                "Orchestration failed",
+                f"{type(exc).__name__}: {exc}. Reporting on whatever the agents gathered.",
+            )
+
+        if not state.stop_reason:
+            reached_limit = state.iteration_count >= state.max_iterations
+            if reached_limit:
+                state.stop_reason = f"iteration limit ({state.max_iterations}) reached"
+            else:
+                agents = ", ".join(
+                    _AGENT_NAMES.get(a, a) for a in state.completed_agents
+                ) or "no agents"
+                state.stop_reason = (
+                    f"all selected specialists reported ({agents}); "
+                    f"{len(state.relevant_findings())} relevant finding(s) collected"
+                )
+            state.final_decision = state.stop_reason
+
+        self.logger.speaking_as("orchestrator")
+        self.logger.final(
+            "Stopping at the iteration limit"
+            if "limit" in state.stop_reason.lower()
+            else "Enough information collected",
+            state.stop_reason,
+            iterations_used=state.iteration_count,
+            agents=list(state.completed_agents),
+        )
+
     async def _loop(self, ctx: ToolContext) -> None:
+        """Single-agent collection loop.
+
+        Superseded by `_orchestrate` for normal runs; retained because it is the
+        simplest possible driver of the same state machine and is used to verify the
+        loop in isolation.
+        """
         state = self.state
         state.status = "running"
 
@@ -398,10 +457,22 @@ class InsightPulseAgent:
         return result
 
     # ── 6-7. OBSERVE + ANALYZE ──────────────────────────────
-    def _observe(self, decision: Decision, result: ToolResult, iteration: int) -> None:
+    def _observe(
+        self,
+        decision: Decision,
+        result: ToolResult,
+        iteration: int,
+        agent: str = "",
+    ) -> None:
         state = self.state
         state.current_step = "observe"
         need_key = TOOL_TO_NEED.get(result.tool, "")
+        # Stamp provenance before the analyzer registers these findings, so every
+        # item records which specialist discovered it.
+        if agent:
+            for item in result.items:
+                if not item.discovered_by:
+                    item.discovered_by = agent
 
         observation = self.analyzer.analyze(state, result, need_key=need_key)
 
@@ -596,6 +667,9 @@ class InsightPulseAgent:
             insights=state.final_insights,
             summary=state.summary,
             state=state.snapshot(),
+            execution_plan=state.execution_plan,
+            agents=self.orchestrator.contributions(self),
+            collaboration_events=state.collaboration_events,
             metrics={
                 "duration_ms": duration_ms,
                 "iterations": state.iteration_count,
@@ -618,6 +692,12 @@ class InsightPulseAgent:
                 "coverage": state.coverage(),
                 "competitor_coverage": state.competitor_coverage(),
                 "signals_detected": sorted(state.detected_signals),
+                "agents_used": list(state.completed_agents),
+                "agents_selected": [
+                    e["agent"] for e in state.execution_plan if e.get("selected")
+                ],
+                "collaboration_events": len(state.collaboration_events),
+                "corroborated_findings": len(state.corroborated_finding_ids),
             },
             activity_text=self.logger.render(),
             insights_text=getattr(self, "_insights_text", ""),
@@ -627,6 +707,9 @@ class InsightPulseAgent:
 # ─────────────────────────────────────────────────────────────
 # convenience
 # ─────────────────────────────────────────────────────────────
+_AGENT_NAMES = {k: v.name for k, v in PROFILES.items()}
+
+
 def _describe_call(tool_input: ToolInput) -> str:
     bits = [f'query "{tool_input.query}"']
     if tool_input.keywords:

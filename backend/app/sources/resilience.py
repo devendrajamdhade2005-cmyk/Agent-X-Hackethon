@@ -13,12 +13,8 @@ import statistics
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy.orm import Session
-
-from ..models import SourceHealth, utcnow
 from .base import RawItem, SourceConnector, SourceError, SourceQuery
 
 FAILURE_THRESHOLD = 3
@@ -170,34 +166,6 @@ class ResilienceRegistry:
             b.state = "open"
             b.opened_at = time.monotonic()
         return b
-
-    # ── persistence ─────────────────────────────────────────
-    def load_from_db(self, db: Session) -> None:
-        for row in db.query(SourceHealth).all():
-            b = self.breaker(row.source)
-            b.forced_failure = bool(row.forced_failure)
-            b.total_calls = row.total_calls
-            b.total_failures = row.total_failures
-
-    def flush_to_db(self, db: Session) -> None:
-        for b in self._breakers.values():
-            row = db.get(SourceHealth, b.source)
-            if row is None:
-                row = SourceHealth(source=b.source)
-                db.add(row)
-            row.state = b.state
-            row.consecutive_failures = b.consecutive_failures
-            row.total_calls = b.total_calls
-            row.total_failures = b.total_failures
-            row.p50_ms = b.p50_ms
-            row.last_latency_ms = b.last_latency_ms
-            row.last_error = b.last_error
-            row.forced_failure = b.forced_failure
-            row.opened_at = (
-                datetime.now(UTC).replace(tzinfo=None) if b.state == "open" else None
-            )
-            row.updated_at = utcnow()
-        db.commit()
 
 
 registry = ResilienceRegistry()

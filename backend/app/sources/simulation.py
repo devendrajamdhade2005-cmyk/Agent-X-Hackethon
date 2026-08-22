@@ -384,12 +384,52 @@ def simulate_repo(source: str, q: SourceQuery, count: int) -> list[RawItem]:
     return items
 
 
+def simulate_web(source: str, q: SourceQuery, count: int) -> list[RawItem]:
+    """Open-web results: same event shapes as news, but attributed to live pages."""
+    rng = _rng(source, q, salt="web")
+    items: list[RawItem] = []
+    used: set[int] = set()
+    for _ in range(count):
+        kw = _topic(rng, q)
+        company = _company(rng, q)
+        outlet, domain = rng.choice(_OUTLETS)
+        choices = [i for i in range(len(_NEWS_SHAPES)) if i not in used] or list(
+            range(len(_NEWS_SHAPES))
+        )
+        idx = rng.choice(choices)
+        used.add(idx)
+        shape, body = _NEWS_SHAPES[idx]
+        amount = rng.choice([15, 60, 90, 250, 500])
+        headline = shape.format(company=company, kw=kw, n=amount)
+        items.append(
+            RawItem(
+                source_type="web",
+                source_name=source,
+                title=headline,
+                url=f"https://{domain}/{_slug(headline)}",
+                raw_text=body.format(company=company, kw=kw, n=amount),
+                author=domain,
+                published_at=_when(rng, q),
+                external_id=f"sim:{source}:{_slug(headline)}",
+                is_simulated=True,
+                meta={
+                    "outlet": outlet,
+                    "domain": domain,
+                    "tavily_score": round(rng.uniform(0.55, 0.95), 4),
+                    "topic": "news",
+                },
+            )
+        )
+    return items
+
+
 _DISPATCH = {
     "research": simulate_research,
     "patent": simulate_patent,
     "news": simulate_news,
     "social": simulate_social,
     "repo": simulate_repo,
+    "web": simulate_web,
 }
 
 

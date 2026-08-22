@@ -19,7 +19,9 @@ class CompetitorTool(Tool):
     name = "competitor_search"
     display_name = "Competitor Intelligence"
     source_label = "competitor"
-    provider_names = ("rss", "hackernews", "newsapi", "gnews", "github", "reddit")
+    provider_names = (
+        "rss", "hackernews", "newsapi", "newsdata", "gnews", "github", "reddit",
+    )
 
     description = (
         "Searches for activity by a specific named company across news, open-source "
@@ -55,7 +57,7 @@ class CompetitorTool(Tool):
             )
 
             news_items = await self._collect(
-                ("rss", "hackernews", "newsapi", "gnews"),
+                ("rss", "hackernews", "newsapi", "newsdata", "gnews"),
                 scoped,
                 ctx,
                 result,

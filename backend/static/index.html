@@ -3,39 +3,49 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>InsightPulse AI — Autonomous Research Intelligence</title>
+<title>InsightPulse AI — Research &amp; Competitive Intelligence</title>
 <meta name="description" content="Autonomous research and competitor intelligence agent." />
 <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
 
-<!-- ══ NAVBAR ══════════════════════════════════════════════ -->
+<!-- ══ NAV ═════════════════════════════════════════════════ -->
 <header class="nav">
   <div class="nav-inner">
-    <div class="nav-brand">
-      <span class="logo" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+    <a class="brand" href="#" aria-label="InsightPulse AI home">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"
              stroke-linecap="round" stroke-linejoin="round">
-          <path d="M3 12h3l2.5-7 3.5 14 3-9 2 2h4" />
+          <path d="M3 12h3.2l2.3-6.6 3.4 13.2 2.9-8.4 1.9 1.8H21" />
         </svg>
       </span>
-      <span class="nav-titles">
+      <span class="brand-text">
         <strong>InsightPulse AI</strong>
         <small>Autonomous Research Intelligence</small>
       </span>
-    </div>
+    </a>
+
+    <nav class="nav-links" aria-label="Sections">
+      <button type="button" data-nav="overview" class="is-on">Overview</button>
+      <button type="button" data-nav="research">Research</button>
+      <button type="button" data-nav="competitors">Competitors</button>
+      <button type="button" data-nav="patents">Patents</button>
+      <button type="button" data-nav="news">News</button>
+      <button type="button" data-nav="insights">Insights</button>
+      <button type="button" data-nav="reports">Reports</button>
+    </nav>
 
     <div class="nav-right">
-      <span class="status" id="status" data-state="ready" aria-live="polite">
-        <span class="status-dot" aria-hidden="true"></span>
-        <span id="status-text">Agent Ready</span>
+      <span class="agent-status" id="agent-status" data-state="idle" aria-live="polite">
+        <i class="pulse-dot" aria-hidden="true"></i>
+        <span id="agent-status-text">Connecting…</span>
       </span>
       <button type="button" class="icon-btn" id="settings-btn"
-              aria-label="Settings" aria-expanded="false">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              aria-label="System info and settings" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="12" cy="12" r="3" />
-          <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V22a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H2a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 3.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H8a1.7 1.7 0 0 0 1-1.5V2a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H22a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V22a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H2a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 3.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H8a1.7 1.7 0 0 0 1-1.5V2a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H22a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>
         </svg>
       </button>
     </div>
@@ -44,35 +54,35 @@
 
 <main class="page">
 
-  <!-- ══ HERO / INPUT ══════════════════════════════════════ -->
-  <section class="hero" id="hero">
-    <h1>What would you like me to track?</h1>
-    <p class="hero-sub">
-      Describe it in your own words. The agent decides which sources to search,
-      reads what it finds, and reports only what matters.
+  <!-- ══ HERO + SEARCH ═════════════════════════════════════ -->
+  <section class="masthead">
+    <span class="eyebrow">Intelligence Workspace</span>
+    <h1>Research &amp; Competitive Intelligence</h1>
+    <p class="masthead-sub">
+      Discover emerging research, technologies, competitor moves and strategic signals —
+      gathered and prioritized by an autonomous agent.
     </p>
+  </section>
 
-    <form id="run-form" class="card compose" autocomplete="off">
+  <section class="panel search-panel" id="search-panel">
+    <h2 class="search-title">What would you like to track?</h2>
+
+    <form id="search-form" autocomplete="off">
       <label class="sr-only" for="goal">Tracking goal</label>
-      <textarea id="goal" rows="3" required maxlength="600"
-        placeholder="Example: Track new AI research, patents, and competitor activity related to AI voice assistants."></textarea>
+      <textarea id="goal" rows="2" required maxlength="600"
+        placeholder="Track AI agents, generative AI patents, competitor announcements and emerging research."></textarea>
 
-      <div class="suggestions" id="suggestions">
-        <button type="button" class="suggestion"
-          data-goal="Track important developments in AI agents and monitor OpenAI and Anthropic"
-          data-kw="AI agents,multi-agent systems" data-comp="OpenAI,Anthropic">AI agents &amp; rivals</button>
-        <button type="button" class="suggestion"
-          data-goal="Monitor patents related to generative AI"
-          data-kw="generative AI" data-comp="">Generative AI patents</button>
-        <button type="button" class="suggestion"
-          data-goal="Track research developments in solid-state batteries"
-          data-kw="solid-state battery" data-comp="">Battery research</button>
-        <button type="button" class="suggestion"
-          data-goal="Monitor industry news and competitor moves in AI voice assistants"
-          data-kw="AI voice assistant,speech synthesis" data-comp="OpenAI,Google">Voice AI market</button>
+      <div class="presets" id="presets">
+        <span class="presets-label">Quick presets</span>
+        <button type="button" data-preset data-goal="Track important developments in AI agents and monitor OpenAI and Anthropic" data-kw="AI agents,multi-agent systems" data-comp="OpenAI,Anthropic">AI Agents</button>
+        <button type="button" data-preset data-goal="Monitor generative AI patents and competitor IP activity" data-kw="generative AI" data-comp="OpenAI,Google">Generative AI</button>
+        <button type="button" data-preset data-goal="Track voice AI research and recent competitor announcements" data-kw="voice AI,speech synthesis" data-comp="OpenAI,ElevenLabs">Voice AI</button>
+        <button type="button" data-preset data-goal="Monitor AI security research, vulnerabilities and industry response" data-kw="LLM security,prompt injection" data-comp="">Cybersecurity</button>
+        <button type="button" data-preset data-goal="Track robotics research and embodied AI developments" data-kw="robotics,embodied AI" data-comp="Tesla,Figure">Robotics</button>
+        <button type="button" data-preset data-goal="Track healthcare AI research, patents and regulatory developments" data-kw="healthcare AI,medical imaging" data-comp="">Healthcare AI</button>
       </div>
 
-      <div class="chip-fields">
+      <div class="chip-grid">
         <div class="chip-field">
           <label for="kw-input">Keywords <span class="opt">optional</span></label>
           <div class="chip-box" id="kw-box">
@@ -89,12 +99,12 @@
         </div>
       </div>
 
-      <details class="advanced">
+      <details class="reveal advanced">
         <summary>Advanced options</summary>
-        <div class="advanced-grid">
+        <div class="reveal-body adv-grid">
           <div>
-            <label for="max-iterations">Max reasoning steps</label>
-            <input id="max-iterations" type="number" min="1" max="25" value="10" />
+            <label for="max-iter">Max reasoning steps</label>
+            <input id="max-iter" type="number" min="1" max="25" value="10" />
             <small>Safety limit on the agent's loop.</small>
           </div>
           <div>
@@ -103,162 +113,168 @@
               <option value="live" selected>Live sources</option>
               <option value="sim">Demo data (offline, instant)</option>
             </select>
-            <small>Live queries real APIs. Demo runs fully offline.</small>
+            <small>Live queries real APIs. Demo runs fully offline with labelled data.</small>
           </div>
         </div>
       </details>
 
       <div class="cta-row">
-        <button type="submit" class="btn-primary" id="run-btn">
+        <button type="submit" class="btn-primary lg" id="run-btn">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5 10.1 12 4.5 10l5.6-1.5z" />
+            <path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5 10.1 12 4.5 10l5.6-1.5z"/>
           </svg>
           Run Intelligence Scan
         </button>
-        <button type="button" class="btn-ghost" id="stop-btn" hidden>Stop</button>
+        <button type="button" class="btn-ghost" id="stop-btn" hidden>Stop Agent</button>
       </div>
-      <p class="form-error" id="form-error" role="alert" hidden></p>
+      <p class="form-error" id="search-error" role="alert" hidden></p>
     </form>
   </section>
 
-  <!-- ══ PROGRESS ══════════════════════════════════════════ -->
-  <section class="card progress-card" id="progress-card" hidden aria-live="polite">
-    <div class="progress-head">
+  <!-- ══ LIVE RUN ══════════════════════════════════════════ -->
+  <section class="panel live" id="live" hidden aria-live="polite">
+    <div class="live-head">
       <span class="spinner" aria-hidden="true"></span>
       <div>
         <h2>Your AI agent is working</h2>
-        <p id="progress-message">Getting started…</p>
+        <p id="live-msg">Starting…</p>
       </div>
     </div>
-
-    <div class="bar" aria-hidden="true"><span id="bar-fill"></span></div>
-
-    <ol class="steps" id="steps">
-      <li data-step="goal"><span class="dot"></span>Understanding your goal</li>
-      <li data-step="plan"><span class="dot"></span>Planning the search</li>
-      <li data-step="search"><span class="dot"></span><span data-label>Searching sources</span></li>
-      <li data-step="analyze"><span class="dot"></span>Analyzing findings</li>
-      <li data-step="insights"><span class="dot"></span>Creating insights</li>
-    </ol>
-
-    <button type="button" class="link-btn" id="live-log-toggle" aria-expanded="false">
-      View detailed agent activity
+    <ol class="tracker" id="tracker"></ol>
+    <button type="button" class="link-btn" id="ticks-toggle" aria-expanded="false">
+      View live agent activity
     </button>
-    <div class="live-log" id="live-log" hidden></div>
+    <div class="ticks-wrap" id="ticks-wrap" hidden><div class="ticks" id="ticks"></div></div>
   </section>
 
-  <!-- ══ REPORT ════════════════════════════════════════════ -->
-  <section class="report" id="report" hidden>
+  <!-- ══ DASHBOARD ═════════════════════════════════════════ -->
+  <div id="dash" hidden>
 
-    <div class="report-head">
-      <div>
-        <h2>Your Intelligence Report</h2>
-        <p id="report-meta"></p>
-      </div>
-      <button type="button" class="btn-ghost small" id="new-scan-btn">New scan</button>
-    </div>
+    <div class="report-bar" id="report-bar" hidden></div>
 
-    <!-- Today's summary -->
-    <div class="card summary-card" id="summary-card">
-      <h3>Today's summary</h3>
-      <p class="summary-lead" id="summary-lead"></p>
-      <ul class="summary-counts" id="summary-counts"></ul>
-      <div class="summary-blocks">
-        <div class="summary-block" id="trend-block" hidden>
-          <span class="block-label">Main trend</span>
-          <p id="summary-trend"></p>
-        </div>
-        <div class="summary-block" id="next-block" hidden>
-          <span class="block-label">Suggested next step</span>
-          <p id="summary-next"></p>
-        </div>
-      </div>
-      <details class="full-summary" id="full-summary" hidden>
-        <summary>Read the full analyst summary</summary>
-        <div id="summary-full-text"></div>
-      </details>
-    </div>
+    <div class="kpis" id="kpis" hidden></div>
 
-    <!-- Top insight -->
-    <div class="card top-insight" id="top-insight" hidden></div>
+    <section class="panel summary-panel" id="summary"></section>
+    <section class="panel hero-panel" id="hero" hidden></section>
 
-    <!-- Filters -->
-    <div class="filters" id="filters" hidden>
-      <div class="filter-row" role="group" aria-label="Filter by priority">
-        <button type="button" class="pill active" data-filter="priority" data-value="all">All</button>
-        <button type="button" class="pill p-high" data-filter="priority" data-value="HIGH">High</button>
-        <button type="button" class="pill p-medium" data-filter="priority" data-value="MEDIUM">Medium</button>
-        <button type="button" class="pill p-low" data-filter="priority" data-value="LOW">Low</button>
-      </div>
-      <div class="filter-row" role="group" aria-label="Filter by source" id="source-filters"></div>
-    </div>
-
-    <!-- Insight cards -->
-    <div class="insight-grid" id="insight-grid"></div>
-    <p class="empty-note" id="empty-note" hidden></p>
-
-    <!-- How the agent worked -->
-    <details class="card agent-story" id="agent-story">
+    <details class="panel trail-panel" id="trail" hidden>
       <summary>
-        <span>How the AI agent worked</span>
-        <small>proof of autonomous reasoning</small>
+        <span class="trail-title">How the AI Agents Worked</span>
+        <small>proof of multi-agent orchestration — plan → delegate → observe → collaborate → merge</small>
       </summary>
-      <div class="story-body">
-        <ol class="flow" id="flow"></ol>
-
-        <details class="tech">
-          <summary>Show technical details</summary>
-          <div class="tech-body">
-            <div class="tech-stats" id="tech-stats"></div>
-            <div class="tech-tabs" role="tablist">
-              <button type="button" class="tech-tab active" data-tech="log" role="tab">Activity log</button>
-              <button type="button" class="tech-tab" data-tech="observations" role="tab">Observations</button>
-              <button type="button" class="tech-tab" data-tech="findings" role="tab">Raw findings</button>
-            </div>
-            <div class="tech-panel" id="tech-log"></div>
-            <div class="tech-panel" id="tech-observations" hidden></div>
-            <div class="tech-panel" id="tech-findings" hidden></div>
-          </div>
+      <div class="reveal-body">
+        <div id="agents-body"></div>
+        <details class="reveal reasoning">
+          <summary>Show the full reasoning trail</summary>
+          <div class="reveal-body" id="trail-body"></div>
         </details>
       </div>
     </details>
-  </section>
+
+    <div data-view="overview"><div id="overview-body" class="view-body"></div></div>
+
+    <div data-view="research" hidden>
+      <header class="view-head accent-blue">
+        <h2>🔬 Research Intelligence</h2>
+        <p>Peer-reviewed papers and preprints, scored against your goal</p>
+      </header>
+      <div id="research-body" class="view-body"></div>
+    </div>
+
+    <div data-view="competitors" hidden>
+      <header class="view-head accent-orange">
+        <h2>🏢 Competitor Intelligence</h2>
+        <p>Company-scoped activity across news, repos, forums and the live web</p>
+      </header>
+      <div id="competitors-body" class="view-body"></div>
+    </div>
+
+    <div data-view="patents" hidden>
+      <header class="view-head accent-cyan">
+        <h2>📜 Patent Intelligence</h2>
+        <p>Filings and grants, with competitor-owned IP flagged</p>
+      </header>
+      <div id="patents-body" class="view-body"></div>
+    </div>
+
+    <div data-view="news" hidden>
+      <header class="view-head accent-green">
+        <h2>📰 Industry News</h2>
+        <p>Curated trade press and live open-web coverage</p>
+      </header>
+      <div id="news-body" class="view-body"></div>
+    </div>
+
+    <div data-view="insights" hidden>
+      <header class="view-head accent-pink">
+        <h2>🎯 Prioritized Insights</h2>
+        <p>Everything the agent judged worth your attention</p>
+      </header>
+      <div id="insights-body" class="view-body"></div>
+    </div>
+
+    <div data-view="reports" hidden>
+      <header class="view-head accent-purple">
+        <h2>📄 Reports</h2>
+        <p>Export this scan as a professional intelligence document</p>
+      </header>
+      <div id="reports-body" class="view-body"></div>
+    </div>
+  </div>
 </main>
 
-<!-- ══ SETTINGS DRAWER ═════════════════════════════════════ -->
-<div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
-<aside class="drawer" id="drawer" hidden aria-label="Settings">
+<footer class="foot">
+  <span>InsightPulse AI — autonomous research &amp; competitor intelligence</span>
+  <span class="sep">·</span><a href="/docs" target="_blank" rel="noopener">API</a>
+  <span class="sep">·</span><a href="/health" target="_blank" rel="noopener">Health</a>
+</footer>
+
+<!-- ══ EVIDENCE DRAWER ═════════════════════════════════════ -->
+<div class="scrim" id="drawer-scrim" hidden></div>
+<aside class="drawer" id="drawer" hidden role="dialog" aria-modal="true" aria-label="Evidence detail">
   <div class="drawer-head">
-    <h2>Settings</h2>
-    <button type="button" class="icon-btn" id="drawer-close" aria-label="Close settings">
+    <h2>Evidence</h2>
+    <button type="button" class="icon-btn" id="drawer-close" aria-label="Close">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
            stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
     </button>
   </div>
-  <div class="drawer-body" id="drawer-body">
-    <p class="muted">Loading…</p>
-  </div>
-  <div class="drawer-foot">
-    <a href="/docs" target="_blank" rel="noopener">API docs ↗</a>
-    <a href="/health" target="_blank" rel="noopener">Health ↗</a>
-    <a href="/api/agent/tools" target="_blank" rel="noopener">Tool catalog ↗</a>
-  </div>
+  <div class="drawer-body" id="drawer-body"></div>
 </aside>
 
-<!-- ══ DETAIL MODAL ════════════════════════════════════════ -->
-<div class="modal-backdrop" id="modal-backdrop" hidden></div>
-<div class="modal" id="modal" hidden role="dialog" aria-modal="true" aria-labelledby="modal-title">
-  <div class="modal-head">
-    <h2 id="modal-title">Insight details</h2>
-    <button type="button" class="icon-btn" id="modal-close" aria-label="Close">
+<!-- ══ SYSTEM INFO ═════════════════════════════════════════ -->
+<div class="scrim" id="sysinfo-scrim" hidden></div>
+<aside class="drawer" id="sysinfo-panel" hidden role="dialog" aria-modal="true" aria-label="System info">
+  <div class="drawer-head">
+    <h2>System &amp; Sources</h2>
+    <button type="button" class="icon-btn" id="sysinfo-close" aria-label="Close">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
            stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
     </button>
   </div>
-  <div class="modal-body" id="modal-body"></div>
+  <div class="drawer-body" id="sysinfo"></div>
+</aside>
+
+<!-- ══ REPORT PREVIEW ══════════════════════════════════════ -->
+<div class="preview" id="preview" hidden role="dialog" aria-modal="true" aria-label="Report preview">
+  <div class="preview-bar">
+    <div class="pb-left">
+      <button type="button" class="btn-ghost compact" id="preview-back">← Back</button>
+      <span class="pb-title">Intelligence Report</span>
+      <span class="mono pb-id" id="preview-id"></span>
+    </div>
+    <div class="pb-right">
+      <button type="button" class="btn-ghost compact" id="preview-regen">🔄 Generate again</button>
+      <button type="button" class="btn-primary compact" id="preview-download">📥 Download PDF</button>
+    </div>
+  </div>
+  <div class="preview-body">
+    <div class="preview-loading" id="preview-loading">Building your report…</div>
+    <iframe id="preview-frame" title="Report preview" hidden></iframe>
+  </div>
 </div>
 
-<script src="/static/app.js"></script>
+<script type="module" src="/static/js/main.js"></script>
 </body>
 </html>

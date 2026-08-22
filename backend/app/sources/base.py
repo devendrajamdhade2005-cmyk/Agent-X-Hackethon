@@ -165,7 +165,17 @@ class SourceConnector(ABC):
         *,
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
+        tolerate_status: tuple[int, ...] = (),
     ) -> httpx.Response:
+        """GET with uniform error mapping.
+
+        `tolerate_status` lets a connector opt out of the 4xx guard for specific
+        codes so it can read the response body. Needed because some APIs report
+        an empty result set with an error status — SerpAPI answers "no results"
+        with HTTP 400 — and treating that as an outage would silently downgrade
+        the run to simulated data. Defaults to empty, so no existing caller
+        changes behaviour.
+        """
         try:
             resp = await client.get(
                 url, params=params, headers=headers, timeout=self.timeout_seconds
@@ -175,6 +185,8 @@ class SourceConnector(ABC):
         except httpx.HTTPError as exc:
             raise SourceError(f"transport error: {exc}", retryable=True) from exc
 
+        if resp.status_code in tolerate_status:
+            return resp
         if resp.status_code == 429:
             raise SourceError(
                 "rate limited (429)",

@@ -14,8 +14,15 @@ from .competitor_tool import CompetitorTool
 from .news_tool import NewsTool
 from .patent_tool import PatentTool
 from .research_tool import ResearchTool
+from .web_tool import WebIntelligenceTool
 
-TOOL_CLASSES: list[type[Tool]] = [ResearchTool, NewsTool, CompetitorTool, PatentTool]
+TOOL_CLASSES: list[type[Tool]] = [
+    ResearchTool,
+    NewsTool,
+    WebIntelligenceTool,
+    CompetitorTool,
+    PatentTool,
+]
 
 
 class ToolRegistry:

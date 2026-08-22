@@ -42,12 +42,31 @@ def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
+# A syndicated headline is often republished with the outlet appended, e.g.
+# "Anthropic Could Aim to Raise $100 Billion - The New York Times". Comparing
+# only the opening tokens collapses those onto the original. Applied when the
+# headline is long enough that a shared opening means the same story.
+_PREFIX_TOKENS = 11
+
+
 def _title_fingerprint(title: str) -> str:
     """Normalized title used for near-duplicate suppression."""
     if not title:
         return ""
     letters = "".join(c if c.isalnum() else " " for c in title.lower())
     return " ".join(letters.split())[:120]
+
+
+def _title_prefix_key(title: str) -> str:
+    """Opening-tokens key that survives an appended outlet name.
+
+    Returns "" for short headlines, where a shared opening is not strong enough
+    evidence of a duplicate.
+    """
+    tokens = _title_fingerprint(title).split()
+    if len(tokens) <= _PREFIX_TOKENS:
+        return ""
+    return " ".join(tokens[:_PREFIX_TOKENS])
 
 
 # ─────────────────────────────────────────────────────────────
@@ -262,9 +281,20 @@ class AgentState:
     final_insights: list[dict[str, Any]] = field(default_factory=list)
     summary: str = ""
 
+    # ── multi-agent orchestration ───────────────────────────
+    execution_plan: list[dict[str, Any]] = field(default_factory=list)
+    active_agent: str = ""
+    completed_agents: list[str] = field(default_factory=list)
+    pending_tasks: list[dict[str, Any]] = field(default_factory=list)
+    agent_messages: list[dict[str, Any]] = field(default_factory=list)
+    agent_reports: list[dict[str, Any]] = field(default_factory=list)
+    collaboration_events: list[dict[str, Any]] = field(default_factory=list)
+    corroborated_finding_ids: set[str] = field(default_factory=set)
+
     # ── bookkeeping ─────────────────────────────────────────
     seen_finding_ids: set[str] = field(default_factory=set)
     seen_title_keys: set[str] = field(default_factory=set)
+    seen_title_prefixes: set[str] = field(default_factory=set)
     call_signatures: set[str] = field(default_factory=set)
     detected_signals: set[str] = field(default_factory=set)
     mentioned_companies: set[str] = field(default_factory=set)
@@ -283,6 +313,9 @@ class AgentState:
 
     def call_count(self, tool: str) -> int:
         return sum(1 for c in self.tool_calls if c.tool == tool)
+
+    def findings_by_agent(self, agent_key: str) -> list[FindingRecord]:
+        return [f for f in self.findings if f.discovered_by == agent_key]
 
     def findings_by_source(self, source: str) -> list[FindingRecord]:
         return [f for f in self.findings if f.source == source]
@@ -329,9 +362,15 @@ class AgentState:
         title_key = _title_fingerprint(finding.title)
         if title_key and title_key in self.seen_title_keys:
             return False
+        # Third stage: the same wire story republished with the outlet appended.
+        prefix_key = _title_prefix_key(finding.title)
+        if prefix_key and prefix_key in self.seen_title_prefixes:
+            return False
         self.seen_finding_ids.add(finding.id)
         if title_key:
             self.seen_title_keys.add(title_key)
+        if prefix_key:
+            self.seen_title_prefixes.add(prefix_key)
         self.findings.append(finding)
         return True
 
@@ -367,6 +406,12 @@ class AgentState:
             "observations": [o.to_dict() for o in self.observations],
             "coverage": self.coverage(),
             "competitor_coverage": self.competitor_coverage(),
+            "execution_plan": self.execution_plan,
+            "active_agent": self.active_agent,
+            "completed_agents": self.completed_agents,
+            "agent_messages": self.agent_messages,
+            "agent_reports": self.agent_reports,
+            "collaboration_events": self.collaboration_events,
             "detected_signals": sorted(self.detected_signals),
             "errors": [e.to_dict() for e in self.errors],
             "final_decision": self.final_decision,

@@ -1,15 +1,15 @@
-"""News connectors: NewsAPI, GNews, curated RSS, Hacker News."""
+"""News connectors: NewsAPI, GNews, NewsData.io, curated RSS, Hacker News."""
 
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 
 from . import simulation
 from .base import RawItem, SourceConnector, SourceError, SourceQuery
-from .credibility import classify
+from .credibility import classify, is_non_editorial, is_redirect_wrapper
 
 _EPOCH = datetime(1970, 1, 1)
 
@@ -35,11 +35,21 @@ class NewsApiConnector(SourceConnector):
     rate_limit_per_min = 30
     docs_url = "https://newsapi.org/docs/endpoints/everything"
 
+    # The free Developer plan only serves roughly one month of history. Asking
+    # for more returns HTTP 426 `parameterInvalid` and the whole call is lost —
+    # and the default tool window is 45 days, so this clamp is load-bearing
+    # rather than defensive. Verified against the live API.
+    MAX_HISTORY_DAYS = 29
+
     async def fetch(self, client: httpx.AsyncClient, q: SourceQuery) -> list[RawItem]:
         terms = q.keywords[:3] or [q.query]
         query = " OR ".join(f'"{t}"' for t in terms if t)
         if q.competitors:
             query = f"({query}) OR ({' OR '.join(chr(34) + c + chr(34) for c in q.competitors[:3])})"
+        floor = datetime.now(UTC) - timedelta(days=self.MAX_HISTORY_DAYS)
+        since = q.since
+        if since.tzinfo is None:
+            since = since.replace(tzinfo=UTC)
         resp = await self._get(
             client,
             "https://newsapi.org/v2/everything",
@@ -48,7 +58,7 @@ class NewsApiConnector(SourceConnector):
                 "sortBy": "publishedAt",
                 "pageSize": min(q.limit, 25),
                 "language": "en",
-                "from": q.since.date().isoformat(),
+                "from": max(since, floor).date().isoformat(),
             },
             headers={"X-Api-Key": self.api_key},
         )
@@ -66,6 +76,8 @@ class NewsApiConnector(SourceConnector):
             )
             for a in payload.get("articles", []) or []
             if a.get("title")
+            and not is_non_editorial(a.get("url") or "")
+            and not is_redirect_wrapper(a.get("url") or "")
         ]
 
     def simulate(self, q: SourceQuery) -> list[RawItem]:
@@ -107,7 +119,124 @@ class GNewsConnector(SourceConnector):
             )
             for a in payload.get("articles", []) or []
             if a.get("title")
+            and not is_non_editorial(a.get("url") or "")
+            and not is_redirect_wrapper(a.get("url") or "")
         ]
+
+    def simulate(self, q: SourceQuery) -> list[RawItem]:
+        return simulation.simulate(self.name, self.source_type, q)
+
+
+class NewsDataConnector(SourceConnector):
+    """newsdata.io — broad global aggregator, generous free tier.
+
+    Free-tier constraints verified against the live API, not guessed:
+      * ``size`` above 10 returns HTTP 422 — so the page size is clamped.
+      * ``from_date`` is rejected on ``/1/news`` (paid-only), so the recency
+        window is applied client-side against ``q.since``.
+      * ``content`` comes back as the literal string "ONLY AVAILABLE IN PAID
+        PLANS", so it is discarded and ``description`` is used as the body.
+    """
+
+    name = "newsdata"
+    source_type = "news"
+    label = "NewsData.io"
+    requires_key = True
+    rate_limit_per_min = 30
+    docs_url = "https://newsdata.io/documentation"
+
+    # Free tier hard-caps the page size; larger values are an HTTP 422.
+    MAX_PAGE_SIZE = 10
+    _PAID_PLACEHOLDER = "ONLY AVAILABLE IN PAID PLANS"
+
+    async def fetch(self, client: httpx.AsyncClient, q: SourceQuery) -> list[RawItem]:
+        terms = q.keywords[:2] or [q.query]
+        query = " OR ".join(f'"{t}"' for t in terms if t)
+        if q.competitors:
+            query = " OR ".join(f'"{c}"' for c in q.competitors[:3])
+        # newsdata caps the query string; over-long queries return HTTP 422.
+        query = query[:100]
+
+        # Headline matching first. Measured against the live API, `qInTitle`
+        # returned 345 focused results where a full-text `q` returned 1783 with
+        # 8 of 10 flagged as syndicated duplicates. Broaden only if the tighter
+        # query finds nothing, which mirrors how the other connectors degrade.
+        payload = await self._search(client, q, query, in_title=True)
+        items = self._parse(payload, q)
+        if not items:
+            payload = await self._search(client, q, query, in_title=False)
+            items = self._parse(payload, q)
+        return items
+
+    async def _search(
+        self,
+        client: httpx.AsyncClient,
+        q: SourceQuery,
+        query: str,
+        *,
+        in_title: bool,
+    ) -> dict:
+        resp = await self._get(
+            client,
+            "https://newsdata.io/api/1/news",
+            params={
+                "apikey": self.api_key,
+                ("qInTitle" if in_title else "q"): query,
+                "language": "en",
+                # Server-side dedup: this tier syndicates the same wire story
+                # across dozens of local outlets.
+                "removeduplicate": 1,
+                "size": min(q.limit, self.MAX_PAGE_SIZE),
+            },
+        )
+        payload = resp.json()
+        if payload.get("status") != "success":
+            detail = payload.get("results") or payload.get("message") or "newsdata error"
+            # 429 = free-tier throttle: worth retrying, unlike a rejected key.
+            raise SourceError(str(detail)[:200], retryable=resp.status_code == 429)
+        return payload
+
+    def _parse(self, payload: dict, q: SourceQuery) -> list[RawItem]:
+        cutoff = _naive_utc(getattr(q, "since", None))
+        items: list[RawItem] = []
+        for a in payload.get("results", []) or []:
+            title = (a.get("title") or "").strip()
+            url = a.get("link") or ""
+            if not title or a.get("duplicate"):
+                continue
+            if is_non_editorial(url) or is_redirect_wrapper(url):
+                continue
+            published = self._parse_date(a.get("pubDate"))
+            # The API cannot filter by date on this tier, so enforce the window
+            # here. `_parse_date` returns naive UTC by convention, so the cutoff
+            # is normalised the same way before comparing.
+            if published and cutoff and published < cutoff:
+                continue
+            body = a.get("description") or ""
+            content = a.get("content") or ""
+            if content and self._PAID_PLACEHOLDER not in content.upper():
+                body = f"{body} {content}".strip()
+            outlet = a.get("source_name") or a.get("source_id") or ""
+            creators = a.get("creator") or []
+            items.append(
+                RawItem(
+                    source_type=self.source_type,
+                    source_name=self.name,
+                    title=title,
+                    url=url,
+                    raw_text=body or title,
+                    author=(creators[0] if isinstance(creators, list) and creators else outlet),
+                    published_at=published,
+                    external_id=str(a.get("article_id") or url),
+                    credibility=classify(url, self.source_type),
+                    meta={
+                        "outlet": outlet,
+                        "domain": url.split("/")[2] if "://" in url else "",
+                        "categories": [c for c in (a.get("category") or []) if c][:3],
+                    },
+                )
+            )
+        return items
 
     def simulate(self, q: SourceQuery) -> list[RawItem]:
         return simulation.simulate(self.name, self.source_type, q)
@@ -234,6 +363,17 @@ class HackerNewsConnector(SourceConnector):
 
     def simulate(self, q: SourceQuery) -> list[RawItem]:
         return simulation.simulate(self.name, self.source_type, q)
+
+
+def _naive_utc(value: datetime | None) -> datetime | None:
+    """Match `SourceConnector._parse_date`, which yields naive-UTC datetimes.
+
+    Mixing the two raises `TypeError: can't compare offset-naive and
+    offset-aware datetimes`, so any cutoff is normalised before use.
+    """
+    if value is None:
+        return None
+    return value.astimezone(UTC).replace(tzinfo=None) if value.tzinfo else value
 
 
 def _tokens(text: str) -> list[str]:

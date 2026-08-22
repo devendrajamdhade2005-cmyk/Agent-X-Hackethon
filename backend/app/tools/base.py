@@ -52,9 +52,37 @@ class FindingRecord:
     signals: list[str] = field(default_factory=list)
     relevance: float = 0.0
     meta: dict[str, Any] = field(default_factory=dict)
+    # Multi-agent provenance: which specialist found this, and which other agents
+    # independently surfaced the same development.
+    discovered_by: str = ""
+    corroborated_by: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    # Provider metadata worth surfacing in the UI. Whitelisted rather than passing
+    # `meta` wholesale, so internal/debug keys never leak into a client response.
+    PUBLIC_META_KEYS = (
+        "citation_count",
+        "venue",
+        "institutions",
+        "institution",
+        "concepts",
+        "categories",
+        "assignee",
+        "patent_number",
+        "filing_date",
+        "cpc",
+        "outlet",
+        "domain",
+        "stars",
+        "language",
+        "subreddit",
+        "score",
+        "num_comments",
+        "points",
+        "tavily_score",
+    )
 
     def public(self) -> dict[str, Any]:
         """The compact shape the API returns for `findings`."""
@@ -67,11 +95,19 @@ class FindingRecord:
             "published_date": self.published_date,
             "provider": self.provider,
             "tool": self.tool,
+            "author": self.author,
             "competitor": self.competitor,
             "credibility": self.credibility,
             "simulated": self.simulated,
             "signals": self.signals,
             "relevance": round(self.relevance, 3),
+            "discovered_by": self.discovered_by,
+            "corroborated_by": self.corroborated_by,
+            "meta": {
+                k: self.meta[k]
+                for k in self.PUBLIC_META_KEYS
+                if k in self.meta and self.meta[k] not in (None, "", [], {})
+            },
         }
 
 
@@ -276,12 +312,22 @@ class Tool(ABC):
             )
             if outcome.simulated:
                 result.simulated = True
-            if outcome.ok or outcome.items:
+            if (outcome.ok or outcome.items) and name not in result.providers_used:
+                # Tools that sweep per-competitor hit the same provider repeatedly;
+                # the observation should report each provider once.
                 result.providers_used.append(name)
             if not outcome.ok:
-                result.providers_failed.append(
-                    {"provider": name, "error": outcome.error or "unknown", "note": outcome.note}
-                )
+                # Dedupe on provider name, not the whole dict: a tool that sweeps
+                # per-competitor hits the same provider repeatedly and the breaker
+                # note changes between attempts, so identical failures look distinct.
+                if not any(f["provider"] == name for f in result.providers_failed):
+                    result.providers_failed.append(
+                        {
+                            "provider": name,
+                            "error": outcome.error or "unknown",
+                            "note": outcome.note,
+                        }
+                    )
             if outcome.broadened and not result.note:
                 result.note = outcome.note
             for item in outcome.items:

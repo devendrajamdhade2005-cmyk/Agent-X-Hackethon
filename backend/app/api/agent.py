@@ -40,6 +40,21 @@ def _remember(result: AgentRunResult) -> None:
         _RUNS.popitem(last=False)
 
 
+def get_stored_run(run_id: str) -> dict[str, Any] | None:
+    """Read a completed run. Used by the report builder.
+
+    Reports are always built from an already-finished run — no tool is ever
+    re-called to produce a document.
+    """
+    return _RUNS.get(run_id)
+
+
+def latest_stored_run() -> dict[str, Any] | None:
+    for run in reversed(_RUNS.values()):
+        return run
+    return None
+
+
 # ─────────────────────────────────────────────────────────────
 # Optional shared-secret gate
 # ─────────────────────────────────────────────────────────────
@@ -106,6 +121,11 @@ class RunResponse(BaseModel):
     summary: str
     state: dict[str, Any]
     metrics: dict[str, Any]
+    # Multi-agent surface. Additive: every field above is unchanged, so existing
+    # consumers keep working.
+    execution_plan: list[dict[str, Any]] = Field(default_factory=list)
+    agents: list[dict[str, Any]] = Field(default_factory=list)
+    collaboration_events: list[dict[str, Any]] = Field(default_factory=list)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -179,9 +199,20 @@ async def run_agent_stream(payload: RunRequest) -> StreamingResponse:
 @router.get("/tools")
 async def list_tools() -> dict[str, Any]:
     """The agent's action space, plus which providers are live vs. simulated."""
+    from ..agents.messages import ORCHESTRATOR, SPECIALISTS
+
     return {
         "tools": tool_registry.catalog(),
         "usable": tool_registry.usable_names(),
+        "agents": [
+            {
+                **p.to_dict(),
+                "tools_available": [
+                    t for t in p.tool_names if t in tool_registry.usable_names()
+                ],
+            }
+            for p in (ORCHESTRATOR, *SPECIALISTS)
+        ],
         "provider_health": resilience_registry.snapshots(),
         "capabilities": settings.capability_report(),
         "simulation_mode": settings.simulation_mode,

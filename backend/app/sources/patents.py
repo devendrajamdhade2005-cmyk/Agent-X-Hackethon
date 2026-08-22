@@ -12,6 +12,8 @@ competitor showing up as an assignee is the single highest-value patent signal.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+from html import unescape
 from typing import Any
 
 import httpx
@@ -31,10 +33,30 @@ class GooglePatentsConnector(SourceConnector):
     timeout_seconds = 18.0
     docs_url = "https://serpapi.com/google-patents-api"
 
+    # Patents publish roughly 18 months after filing, so the tool's default
+    # 45-day news-style window returns almost nothing. The patent horizon is
+    # therefore floored at two years regardless of the requested recency —
+    # a two-year-old filing is still current intelligence in IP terms.
+    MIN_HISTORY_DAYS = 730
+
+    # SerpAPI reports "no results" as an `error` string rather than an empty
+    # list, and serves it with HTTP 400. Treating that as a provider outage
+    # would push the tool into simulated data, so it is handled as a real zero.
+    _EMPTY_MARKERS = ("hasn't returned any results", "have not returned any results")
+
     async def fetch(self, client: httpx.AsyncClient, q: SourceQuery) -> list[RawItem]:
         query = q.query or " ".join(q.keywords[:3])
         if q.competitors:
             query = f"{query} ({' OR '.join(q.competitors[:3])})"
+        floor = datetime.now(UTC) - timedelta(days=self.MIN_HISTORY_DAYS)
+        since = q.since if q.since.tzinfo else q.since.replace(tzinfo=UTC)
+        # Relevance ordering, bounded by a publication-date floor.
+        #
+        # `sort=new` looks right for an intelligence feed but discards Google
+        # Patents' relevance ranking entirely: measured against the live API,
+        # "generative AI model compression" returned "Laundry machine and laundry
+        # machine operating method" as its top hit. Default (relevance) ordering
+        # plus `after=publication:` keeps the results on-topic *and* recent.
         resp = await self._get(
             client,
             "https://serpapi.com/search",
@@ -42,20 +64,30 @@ class GooglePatentsConnector(SourceConnector):
                 "engine": "google_patents",
                 "q": query,
                 "num": min(q.limit, 20),
-                "sort": "new",
+                "after": f"publication:{min(since, floor).strftime('%Y%m%d')}",
                 "api_key": self.api_key,
             },
+            # "No results" arrives as HTTP 400 with an explanatory body.
+            tolerate_status=(400,),
         )
-        payload = resp.json()
+        try:
+            payload = resp.json()
+        except ValueError as exc:
+            raise SourceError(f"unparseable response ({resp.status_code})", retryable=False) from exc
         if payload.get("error"):
-            raise SourceError(str(payload["error"]), retryable=False)
+            detail = str(payload["error"])
+            if any(m in detail.lower() for m in self._EMPTY_MARKERS):
+                return []
+            raise SourceError(detail, retryable=resp.status_code >= 500)
 
         items: list[RawItem] = []
         for row in payload.get("organic_results", []) or []:
-            title = (row.get("title") or "").strip()
+            # SerpAPI passes Google's HTML through, so "AT&T" arrives as
+            # "At&amp;T" and would be rendered literally in the PDF report.
+            title = unescape(row.get("title") or "").strip()
             if not title:
                 continue
-            assignee = row.get("assignee") or ""
+            assignee = unescape(row.get("assignee") or "")
             pub_num = row.get("publication_number") or row.get("patent_id") or ""
             items.append(
                 RawItem(
@@ -64,7 +96,7 @@ class GooglePatentsConnector(SourceConnector):
                     title=title,
                     url=row.get("patent_link")
                     or (f"https://patents.google.com/patent/{pub_num}/en" if pub_num else ""),
-                    raw_text=row.get("snippet") or row.get("abstract") or "",
+                    raw_text=unescape(row.get("snippet") or row.get("abstract") or ""),
                     author=assignee,
                     published_at=self._parse_date(
                         row.get("publication_date") or row.get("grant_date")

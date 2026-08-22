@@ -58,8 +58,10 @@ class Settings(BaseSettings):
     semantic_scholar_api_key: str = ""
     newsapi_key: str = ""
     gnews_api_key: str = ""
+    newsdata_api_key: str = ""
     serpapi_key: str = ""
     patentsview_api_key: str = ""
+    tavily_api_key: str = ""
     github_token: str = ""
     reddit_client_id: str = ""
     reddit_client_secret: str = ""
@@ -160,8 +162,10 @@ class Settings(BaseSettings):
             "semantic_scholar": self.semantic_scholar_api_key,
             "newsapi": self.newsapi_key,
             "gnews": self.gnews_api_key,
+            "newsdata": self.newsdata_api_key,
             "serpapi": self.serpapi_key,
             "patentsview": self.patentsview_api_key,
+            "tavily": self.tavily_api_key,
             "github": self.github_token,
             "reddit": self.reddit_client_id,
         }
@@ -191,7 +195,9 @@ class Settings(BaseSettings):
                 "semantic_scholar_key": bool(self.semantic_scholar_api_key),
                 "newsapi": bool(self.newsapi_key),
                 "gnews": bool(self.gnews_api_key),
+                "newsdata": bool(self.newsdata_api_key),
                 "patentsview": bool(self.patentsview_api_key),
+                "tavily_web_search": bool(self.tavily_api_key),
                 "serpapi_patents": bool(self.serpapi_key),
                 "github_token": bool(self.github_token),
             },

@@ -38,6 +38,7 @@ from .state import AgentState, Decision, InformationNeed, Observation
 NEED_TO_TOOL: dict[str, str] = {
     "research": "research_search",
     "news": "news_search",
+    "web": "web_search",
     "competitor": "competitor_search",
     "patent": "patent_search",
 }
@@ -250,9 +251,18 @@ class ObservationAnalyzer:
 # Decision engine
 # ─────────────────────────────────────────────────────────────
 class DecisionEngine:
-    def __init__(self, tools: ToolRegistry, llm: LLMClient | None = None) -> None:
+    def __init__(
+        self,
+        tools: ToolRegistry,
+        llm: LLMClient | None = None,
+        allowed_tools: set[str] | None = None,
+    ) -> None:
         self.tools = tools
         self.llm = llm
+        # When a specialist agent owns this engine, it may only reach for its own
+        # tools. That is what makes the agents genuinely specialized rather than
+        # three names for the same capability.
+        self.allowed_tools = set(allowed_tools) if allowed_tools else None
 
     # ── public API ──────────────────────────────────────────
     async def decide(self, state: AgentState) -> Decision:
@@ -310,6 +320,8 @@ class DecisionEngine:
     def candidates(self, state: AgentState) -> list[Candidate]:
         out: list[Candidate] = []
         usable = set(self.tools.usable_names())
+        if self.allowed_tools is not None:
+            usable &= self.allowed_tools
 
         for need in state.plan.needs:
             tool_name = NEED_TO_TOOL.get(need.key)
@@ -361,7 +373,7 @@ class DecisionEngine:
 
         # 4. Still too little to report on → widen with the best remaining tool.
         if len(state.relevant_findings()) < MIN_TOTAL_RELEVANT:
-            for name in ("news_search", "research_search"):
+            for name in ("web_search", "news_search", "research_search"):
                 if name not in usable or state.call_count(name) >= MAX_CALLS_PER_TOOL:
                     continue
                 need = state.plan.need(TOOL_TO_NEED[name]) or InformationNeed(
@@ -417,6 +429,44 @@ class DecisionEngine:
             if not state.competitors:
                 return None
             return base + 1.0, "", "satisfy_need"
+
+        if need.key == "web":
+            if need.required:
+                return base + 1.0, "", "satisfy_need"
+            # Not required by the plan, so it has to earn the call. Three ways it can:
+            # 1. The curated/academic sources came back thin or empty.
+            thin = [
+                o
+                for o in state.observations
+                if o.tool in {"news_search", "research_search", "competitor_search"}
+                and o.yield_quality in {"thin", "empty", "failed"}
+            ]
+            if thin:
+                return (
+                    8.0,
+                    f"{thin[-1].tool} came back {thin[-1].yield_quality}, so the open web "
+                    f"is the better source",
+                    "follow_signal",
+                )
+            # 2. A market-moving signal appeared that needs corroborating.
+            market = {"launch", "funding", "acquisition", "partnership", "regulatory"}
+            if state.detected_signals & market:
+                hit = sorted(state.detected_signals & market)[0]
+                return (
+                    6.5,
+                    f"{SIGNAL_LABELS.get(hit, hit)} — checking the live web for confirmation "
+                    f"and detail",
+                    "follow_signal",
+                )
+            # 3. A tracked company still has no coverage at all.
+            if state.competitors and state.uncovered_competitors():
+                return (
+                    6.0,
+                    f"no coverage yet for {', '.join(state.uncovered_competitors()[:2])} — "
+                    f"searching the open web directly",
+                    "follow_signal",
+                )
+            return None
 
         if need.key == "patent":
             if need.required:
@@ -499,6 +549,15 @@ class DecisionEngine:
         return out
 
     # ── input construction ──────────────────────────────────
+    def _reason_label(self, need_key: str) -> str:
+        return {
+            "research": "research coverage",
+            "news": "industry news coverage",
+            "web": "live web coverage",
+            "competitor": "competitor coverage",
+            "patent": "patent coverage",
+        }.get(need_key, f"{need_key} coverage")
+
     def _build_input(
         self,
         state: AgentState,
@@ -532,6 +591,17 @@ class DecisionEngine:
             targets = focus or state.uncovered_competitors() or state.competitors
             base.competitors = targets[:3]
             base.limit = 12
+        elif need.key == "web":
+            # Prioritise a company with no coverage yet; Tavily ranks on prose so a
+            # focused natural-language query beats a broad keyword dump.
+            targets = focus or state.uncovered_competitors() or state.competitors
+            base.competitors = targets[:3]
+            base.limit = 10
+            base.since_days = min(since, 60)
+            base.extra = {
+                "topic": "news",
+                "search_depth": "advanced" if attempt > 0 else "basic",
+            }
         elif need.key == "patent":
             base.since_days = max(since, 180)
             base.limit = 8
@@ -541,16 +611,11 @@ class DecisionEngine:
         return base.normalized()
 
     def _reason_for(self, state: AgentState, need: InformationNeed, extra: str) -> str:
-        label = {
-            "research": "research coverage",
-            "news": "industry news coverage",
-            "competitor": "competitor coverage",
-            "patent": "patent coverage",
-        }[need.key]
+        label = self._reason_label(need.key)
 
         if need.attempts == 0:
             head = f"No {label} yet."
-            if need.key == "competitor" and state.competitors:
+            if need.key in {"competitor", "web"} and state.competitors:
                 head = f"No {label} yet for {', '.join(state.competitors[:3])}."
         else:
             head = f"{label.capitalize()} is still short of the {need.min_items} item(s) needed."
@@ -742,6 +807,7 @@ def _source_for_need(need_key: str) -> str:
     return {
         "research": "research",
         "news": "news",
+        "web": "web",
         "competitor": "competitor",
         "patent": "patent",
     }.get(need_key, need_key)

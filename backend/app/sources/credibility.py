@@ -73,6 +73,74 @@ _LOW_DOMAINS = {
     "newsbreak.com",
 }
 
+# Not editorial content at all. Broad news aggregators index these and return
+# automated release notes, listings and directory pages for any technical query
+# — e.g. a search for "AI agents" yields PyPI pages like "agent2win 1.0.7".
+# They are not low-credibility news, they are *not news*, so they are dropped
+# rather than down-weighted. Applied only to the aggregator APIs: a Hacker News
+# story that happens to link a package release is still a genuine signal.
+_NON_EDITORIAL_DOMAINS = {
+    "pypi.org",
+    "npmjs.com",
+    "crates.io",
+    "rubygems.org",
+    "packagist.org",
+    "nuget.org",
+    "hex.pm",
+    "pkg.go.dev",
+    "metacpan.org",
+    "sourceforge.net",
+    "freshports.org",
+    "libraries.io",
+    "changelog.md",
+    "indeed.com",
+    "glassdoor.com",
+    "ziprecruiter.com",
+    "linkedin.com",
+    "coursera.org",
+    "udemy.com",
+}
+
+
+# Aggregator wrappers, not sources. A `news.google.com/rss/articles/<base64>`
+# link is an opaque redirect, so it cannot be shown as a citation and the real
+# article is usually indexed separately anyway. Dropping these keeps the report's
+# source provenance honest and removes a whole class of duplicate.
+_REDIRECT_WRAPPER_DOMAINS = {
+    "news.google.com",
+    "news.url.google.com",
+    "flipboard.com",
+    "headtopics.com",
+    "newsnow.co.uk",
+    "biztoc.com",
+}
+
+
+def is_redirect_wrapper(url: str) -> bool:
+    """True for aggregator links that redirect instead of hosting the article."""
+    host = domain_of(url)
+    if not host:
+        return False
+    return any(
+        host == domain or host.endswith("." + domain)
+        for domain in _REDIRECT_WRAPPER_DOMAINS
+    )
+
+
+def is_non_editorial(url: str) -> bool:
+    """True for package registries, job boards and course listings.
+
+    Used to keep automated directory pages out of the news feed.
+    """
+    host = domain_of(url)
+    if not host:
+        return False
+    return any(
+        host == domain or host.endswith("." + domain)
+        for domain in _NON_EDITORIAL_DOMAINS
+    )
+
+
 # Score modifier applied per tier (points added to the composite score).
 TIER_MODIFIER = {HIGH: 6, STANDARD: 0, LOW: -8, UNVERIFIED: -12}
 
@@ -84,6 +152,8 @@ _TYPE_DEFAULT = {
     "patent": HIGH,
     "news": STANDARD,
     "repo": STANDARD,
+    # Open-web results are domain-tiered: the URL decides, not the source type.
+    "web": STANDARD,
     "social": UNVERIFIED,
 }
 

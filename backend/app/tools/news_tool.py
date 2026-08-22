@@ -11,11 +11,12 @@ class NewsTool(Tool):
     name = "news_search"
     display_name = "Industry News Search"
     source_label = "news"
-    provider_names = ("rss", "hackernews", "newsapi", "gnews")
+    provider_names = ("rss", "hackernews", "newsapi", "newsdata", "gnews")
 
     description = (
         "Searches industry and technology news plus practitioner discussion "
-        "(curated RSS from tier-1 outlets, Hacker News, NewsAPI, GNews). Returns "
+        "(curated RSS from tier-1 outlets, Hacker News, NewsAPI, NewsData.io, "
+        "GNews). Returns "
         "headline, outlet, date and summary."
     )
     when_to_use = (

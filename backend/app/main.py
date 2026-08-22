@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .api.agent import router as agent_router
+from .api.report import router as report_router
 from .config import settings
 from .tools.registry import tool_registry
 
@@ -43,6 +44,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(agent_router)
+    app.include_router(report_router)
 
     @app.get("/health", tags=["ops"])
     async def health() -> JSONResponse:
