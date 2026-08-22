@@ -21,9 +21,10 @@ import * as agentUI from "./agent/activity.js";
 import { renderMultiAgent } from "./agent/multiagent.js";
 import { renderMemory } from "./agent/memory.js";
 import { initFramework } from "./agent/framework.js";
+import { initEvaluation } from "./agent/evaluation.js";
 import { closeDrawer, openDrawer } from "./drawers/detailDrawer.js";
 
-const VIEWS = ["overview", "research", "competitors", "patents", "news", "insights", "framework", "reports"];
+const VIEWS = ["overview", "research", "competitors", "patents", "news", "insights", "framework", "evaluation", "reports"];
 const rendered = new Set();
 let controller = null;
 let trackerIndex = -1;
@@ -213,6 +214,12 @@ function switchView(view) {
   if (view === "framework") {
     show($("dash"), true);
     initFramework($("framework-body"));
+  }
+  // Evaluation is likewise self-driving: it runs its own benchmark suites and reads
+  // stored results, so it must work before any classic scan has happened.
+  if (view === "evaluation") {
+    show($("dash"), true);
+    initEvaluation($("evaluation-body"));
   }
 
   renderView(view);

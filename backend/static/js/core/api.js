@@ -127,6 +127,73 @@ export async function runGraphStream(path, payload, onEvent, signal) {
   return result;
 }
 
+/* ── Evaluation & benchmarking (Task 6) ─────────────────────── */
+async function getJSON(path) {
+  const res = await fetch(apiUrl(path));
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json();
+}
+
+export const getEvaluationCases   = () => getJSON("/api/evaluation/cases");
+export const getEvaluationMetrics = () => getJSON("/api/evaluation/metrics");
+export const getEvaluationRuns    = () => getJSON("/api/evaluation/runs");
+export const getEvaluationBaseline = () => getJSON("/api/evaluation/baseline");
+export const getEvaluationHistory = () => getJSON("/api/evaluation/history");
+export const getEvaluationHuman   = () => getJSON("/api/evaluation/human");
+export const getEvaluationRun = (id) =>
+  getJSON(`/api/evaluation/runs/${encodeURIComponent(id)}`);
+
+export function evaluationReportUrl(format = "md", suiteId = "") {
+  const q = new URLSearchParams({ format });
+  if (suiteId) q.set("suite_id", suiteId);
+  return apiUrl(`/api/evaluation/report?${q.toString()}`);
+}
+
+export async function submitHumanReview(payload) {
+  const res = await fetch(apiUrl("/api/evaluation/human-review"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json();
+}
+
+/** Stream an evaluation suite, reporting live progress events. */
+export async function runEvaluationStream(payload, onEvent, signal) {
+  const res = await fetch(apiUrl("/api/evaluation/run/stream"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  if (!res.ok || !res.body) throw new Error(await readError(res));
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result = null;
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+    for (const frame of frames) {
+      const line = frame.split("\n").find((l) => l.startsWith("data:"));
+      if (!line) continue;
+      let event;
+      try { event = JSON.parse(line.slice(5).trim()); } catch { continue; }
+      if (event.type === "result") result = event.result;
+      if (event.type === "error") throw new Error(event.message || "evaluation error");
+      onEvent(event);
+    }
+  }
+  if (!result) throw new Error("the evaluation ended without producing a result");
+  return result;
+}
+
 export async function generateReport(runId, { force = false } = {}) {
   const res = await fetch(apiUrl("/api/report/generate"), {
     method: "POST",

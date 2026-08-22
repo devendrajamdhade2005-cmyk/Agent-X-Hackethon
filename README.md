@@ -324,6 +324,15 @@ POST /api/agent/graph/run        run the LangGraph runtime (Task 5)
 POST /api/agent/graph/run/stream stream the framework events (SSE)
 POST /api/agent/graph/adversarial run the adversarial demo (SSE)
 GET  /api/agent/graph/info       graph topology, for visualisation
+GET  /api/evaluation/cases       benchmark dataset + scenario coverage
+GET  /api/evaluation/metrics     metric methodology + latest measured values
+POST /api/evaluation/run         run an evaluation suite (Task 6)
+POST /api/evaluation/run/stream  same, streaming live progress (SSE)
+POST /api/evaluation/repeat      repeated-run reliability/consistency
+GET  /api/evaluation/baseline    baseline vs InsightPulse comparison
+GET  /api/evaluation/history     suite history + regression comparison
+POST /api/evaluation/human-review submit reviewer scores
+GET  /api/evaluation/report      evaluation report (json | md | html)
 POST /api/report/generate        build a report from a finished run
 GET  /api/report/{id}/preview    print-ready HTML
 GET  /api/report/{id}/download/{pdf|md|json}
@@ -354,6 +363,7 @@ backend/
 │   ├── api/
 │   │   ├── agent.py           run / stream / tools / runs
 │   │   ├── graph.py           LangGraph run / stream / adversarial / info
+│   │   ├── evaluation.py      cases / run / metrics / baseline / human review
 │   │   └── report.py          generate / preview / download
 │   ├── agents/
 │   │   ├── agent.py           host: ReAct primitives + run lifecycle
@@ -372,6 +382,18 @@ backend/
 │   │   ├── context_builder.py selective per-agent context packets
 │   │   ├── long_term.py       durable memory + relevance retrieval
 │   │   └── manager.py         lifecycle owner the agents talk to
+│   ├── evaluation/            evaluation & benchmarking (Task 6)
+│   │   ├── schemas.py         cases, thresholds, claims, metric results
+│   │   ├── dataset.py         golden benchmark dataset (7 scenario classes)
+│   │   ├── metrics.py         metric catalogue: definitions + formulas
+│   │   ├── automated.py       12 automated evaluators + claim extraction
+│   │   ├── baseline.py        single-pass LLM + fixed-pipeline baselines
+│   │   ├── engine.py          execute a case for real, then score it
+│   │   ├── runner.py          suites, repeats, baselines, aggregation
+│   │   ├── human.py           human review + automated/human comparison
+│   │   ├── regression.py      suite-over-suite regression detection
+│   │   ├── reports.py         evaluation report export
+│   │   └── store.py           suite history (+ JSON mirror)
 │   ├── graph/                 LangGraph runtime (Task 5)
 │   │   ├── state.py           typed shared StateGraph state + reducers
 │   │   ├── nodes.py           understand/plan/agents/observe/evaluate/verify/replan
@@ -385,7 +407,7 @@ backend/
 │   ├── reports/               builder, HTML, PDF, Markdown
 │   └── services/              activity logger (per-agent, typed events)
 ├── static/                    dashboard (vanilla ES modules, no build step)
-└── tests/                     129 tests
+└── tests/                     149 tests
 ```
 
 **Stack:** Python 3.11+ (tested on 3.14) · FastAPI · LangGraph · httpx · ReportLab · vanilla ES modules + hand-rolled SVG
@@ -511,11 +533,101 @@ research tool, so it retries once instead of twice.
 
 ---
 
+## 📊 Evaluation & benchmarking (Task 6)
+
+An evaluation layer (`app/evaluation/`) measures the quality of the real agent rather than
+asserting it. It is distinct from the Task 5 self-evaluator:
+
+| | Question | When |
+|---|---|---|
+| Task 5 evaluator | "what should the agent do next?" | online, steers routing |
+| Task 6 evaluation | "how good was that performance?" | offline, scores quality |
+
+Every score comes from an actual InsightPulse execution. Where a metric cannot be measured
+from the available data it reports **unavailable with a reason** — never a fabricated number.
+
+### Pipeline
+
+```
+Evaluation case → real agent execution (Tasks 1–5) → capture findings, evidence,
+execution record, failures/recovery, timing/resources → automated evaluators →
+metric calculation → optional human review → baseline comparison → PASS/PARTIAL/FAIL →
+suite aggregation → regression history → report export
+```
+
+### Benchmark dataset
+
+11 cases (`EVAL-001`…`EVAL-011`) covering all seven scenario classes: **NORMAL** (5),
+**AMBIGUOUS**, **ADVERSARIAL**, **CONTRADICTORY**, **INCOMPLETE**, **TOOL_FAILURE**,
+**UNSUPPORTED_CONCLUSION**. The suite runs in deterministic simulation mode so repeated
+evaluation is stable and offline.
+
+Ground truth is **structural and checkable** (entities that must be covered, source
+categories that must be reached, subtasks that must be performed), not invented real-world
+facts. The method is reported alongside the score so it is never mistaken for live fact-checking.
+
+### Metric methodology
+
+| Metric | Definition | Formula |
+|---|---|---|
+| **Accuracy** | Agreement with the case's checkable ground truth | F1 of ground-truth recall and evidence-linked insight precision |
+| **Task completion** | Required subtasks actually performed, verified from execution evidence (never an HTTP status) | `completed_subtasks / required_subtasks` |
+| **Reliability** | Repeated executions that completed successfully | `successful_runs / total_runs` |
+| **Robustness** | Performance across scenario classes | unweighted mean of per-category scores |
+| **Evidence quality** | Credibility, relevance, recency, independence, corroboration | `0.30·cred + 0.25·rel + 0.15·recency + 0.15·independence + 0.15·corrob` |
+| **Efficiency** | Useful output per unit of work | normalised relevant-findings-per-tool-call |
+| **Groundedness** | Factual claims supported by collected evidence | `(supported + 0.5·partial) / factual_claims` |
+| **Hallucination rate** | Factual claims with no sufficient evidence | `unsupported_factual / factual_claims` |
+| **Recovery rate** | Injected failures genuinely recovered | `recovered / injected` |
+| **Consistency** | Substantive run-to-run agreement (not wording) | `0.35·findings + 0.25·conclusions + 0.20·priorities + 0.10·confidence + 0.10·completion` |
+| **Latency** | Wall-clock, with stage breakdown | mean / median / p95 (≥5 samples) / min / max |
+| **Resource efficiency** | Cost of a completed task | `1 − (tool_calls / ceiling)`, zero if incomplete |
+| **Uncertainty handling** | Was expressed certainty calibrated to evidence strength | calibration match vs. case expectation |
+| **Unsupported-conclusion rate** | Conclusions asserted without support | `asserted / opportunities` (correct refusal = 0) |
+
+Claim classification is the backbone of groundedness: each insight carries a `finding_id`, so a
+factual claim is grounded only when that link resolves to a finding the run actually collected
+**and** the claim's content appears in it. `recommended_action` (an action, not an assertion) and
+labelled hypotheses are deliberately **excluded** from factual scoring, and hedged statements
+count as explicit uncertainty rather than hallucination.
+
+### Outcomes and quality gates
+
+`PASS` — all configured gates met · `PARTIAL` — soft gate missed, no critical breach ·
+`FAIL` — a **critical** gate breached (hallucination above ceiling, groundedness below floor,
+an unsupported conclusion asserted, a required recovery not achieved, or an injected
+contradiction missed) · `ERROR` — execution raised. A single excellent metric can never mask a
+critical failure. Thresholds are configurable and stored with each suite.
+
+### Baselines
+
+* **Baseline A — single-pass LLM**: one model call, no tools, no evidence links.
+* **Baseline B — fixed pipeline**: the project's pre-LangGraph classic agent, same tools and
+  fixtures, but no dynamic replanning, verification or conflict resolution.
+
+Baselines run the same cases wherever that is fair; fault-injection cases are excluded (a system
+with no tool layer cannot be fairly subjected to tool failure) and the exclusion is reported.
+
+### Run it
+
+```bash
+# dashboard: Evaluation tab → 🧪 Run Evaluation Suite
+curl -X POST http://localhost:8000/api/evaluation/run \
+  -H 'Content-Type: application/json' -d '{"mode":"demo","include_baseline":true}'
+
+curl http://localhost:8000/api/evaluation/metrics          # methodology + latest values
+curl "http://localhost:8000/api/evaluation/report?format=md" -o evaluation.md
+```
+
+Modes: `demo`, `full`, `adversarial`, `single`, `repeated`, `scenario`.
+
+---
+
 ## ✅ Test suite
 
 ```bash
 cd backend && .venv/bin/python -m pytest tests/ -q
-# 129 passed  (111 core + 18 LangGraph framework — tests/test_graph.py)
+# 149 passed  (111 core + 19 LangGraph framework + 19 evaluation)
 ```
 
 Covers goal→plan, dynamic tool selection per goal, observation-driven adaptation, self-termination,
@@ -552,7 +664,7 @@ unchanged.
 | Intelligence dashboard with derived analytics | ✅ |
 | Intelligence Report — PDF / HTML / Markdown / JSON | ✅ |
 | Source provenance auditing | ✅ |
-| 129 automated tests | ✅ |
+| 149 automated tests | ✅ |
 | Public deployment | ❌ not yet — runs locally |
 | Scheduled autonomous re-runs | ❌ out of scope for the current tasks |
 | Multi-user accounts / persistence | ❌ runs are held in memory |
