@@ -1,5 +1,11 @@
 /* Backend client. Endpoints and payload shapes are exactly the existing ones —
-   this redesign changes presentation, not the API contract. */
+   this redesign changes presentation, not the API contract.
+
+   Every request is built with apiUrl() so the backend host is configured in
+   exactly one place (core/config.js): same-origin for local dev, the Render
+   backend in production. */
+
+import { apiUrl } from "./config.js";
 
 async function readError(res) {
   try {
@@ -11,13 +17,13 @@ async function readError(res) {
 }
 
 export async function getTools() {
-  const res = await fetch("/api/agent/tools");
+  const res = await fetch(apiUrl("/api/agent/tools"));
   if (!res.ok) throw new Error(await readError(res));
   return res.json();
 }
 
 export async function getHealth() {
-  const res = await fetch("/health");
+  const res = await fetch(apiUrl("/health"));
   if (!res.ok) throw new Error(await readError(res));
   return res.json();
 }
@@ -28,7 +34,7 @@ export async function getHealth() {
  * Returns the final result object.
  */
 export async function runAgentStream(payload, onEvent, signal) {
-  const res = await fetch("/api/agent/run/stream", {
+  const res = await fetch(apiUrl("/api/agent/run/stream"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -65,7 +71,7 @@ export async function runAgentStream(payload, onEvent, signal) {
 
 /** Non-streaming fallback for environments where SSE is proxied away. */
 export async function runAgent(payload) {
-  const res = await fetch("/api/agent/run", {
+  const res = await fetch(apiUrl("/api/agent/run"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -75,7 +81,7 @@ export async function runAgent(payload) {
 }
 
 export async function generateReport(runId, { force = false } = {}) {
-  const res = await fetch("/api/report/generate", {
+  const res = await fetch(apiUrl("/api/report/generate"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ run_id: runId, force }),
@@ -85,12 +91,16 @@ export async function generateReport(runId, { force = false } = {}) {
 }
 
 export function reportPreviewUrl(reportId, { embedded = true } = {}) {
-  return `/api/report/${encodeURIComponent(reportId)}/preview?embedded=${embedded}&t=${Date.now()}`;
+  return apiUrl(
+    `/api/report/${encodeURIComponent(reportId)}/preview?embedded=${embedded}&t=${Date.now()}`,
+  );
 }
 
 /** Download via blob so API errors surface instead of navigating away. */
 export async function downloadReport(reportId, format) {
-  const res = await fetch(`/api/report/${encodeURIComponent(reportId)}/download/${format}`);
+  const res = await fetch(
+    apiUrl(`/api/report/${encodeURIComponent(reportId)}/download/${format}`),
+  );
   if (!res.ok) throw new Error(await readError(res));
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
