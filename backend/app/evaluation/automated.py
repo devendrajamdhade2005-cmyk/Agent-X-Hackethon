@@ -2,8 +2,16 @@
 
 Twelve evaluators, one concern each. All deterministic: given the same captured run
 they produce the same scores, which is what makes the benchmark repeatable and the
-numbers defensible. An optional LLM judge lives in `judge.py` and can only ever
-*annotate* these results — it never replaces them.
+numbers defensible.
+
+No model-based judge is used. Every judgement here is a checkable computation over
+the run's own evidence, so a score can always be traced to the data that produced it
+rather than to an opinion. That is a deliberate choice: an "LLM says 8/10" signal
+would be non-reproducible, would need its own validation layer, and would make the
+benchmark depend on provider availability — which this project has already seen fail
+(the configured model's quota can be exhausted). Semantic judgement is instead
+supplied by the human review layer in `human.py`, where it is attributed to a
+reviewer and its disagreement with the automated score is reported rather than hidden.
 
 The central mechanic is claim extraction. The agent's final output is a list of
 `Insight` objects, and each one carries a `finding_id` pointing at the evidence it

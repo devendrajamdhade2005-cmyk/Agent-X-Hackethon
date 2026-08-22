@@ -332,7 +332,7 @@ POST /api/evaluation/repeat      repeated-run reliability/consistency
 GET  /api/evaluation/baseline    baseline vs InsightPulse comparison
 GET  /api/evaluation/history     suite history + regression comparison
 POST /api/evaluation/human-review submit reviewer scores
-GET  /api/evaluation/report      evaluation report (json | md | html)
+GET  /api/evaluation/report      evaluation report (json | md | html | pdf)
 POST /api/report/generate        build a report from a finished run
 GET  /api/report/{id}/preview    print-ready HTML
 GET  /api/report/{id}/download/{pdf|md|json}
@@ -392,7 +392,7 @@ backend/
 │   │   ├── runner.py          suites, repeats, baselines, aggregation
 │   │   ├── human.py           human review + automated/human comparison
 │   │   ├── regression.py      suite-over-suite regression detection
-│   │   ├── reports.py         evaluation report export
+│   │   ├── reports.py         evaluation report export (pdf/md/html/json)
 │   │   └── store.py           suite history (+ JSON mirror)
 │   ├── graph/                 LangGraph runtime (Task 5)
 │   │   ├── state.py           typed shared StateGraph state + reducers
@@ -407,7 +407,7 @@ backend/
 │   ├── reports/               builder, HTML, PDF, Markdown
 │   └── services/              activity logger (per-agent, typed events)
 ├── static/                    dashboard (vanilla ES modules, no build step)
-└── tests/                     149 tests
+└── tests/                     150 tests
 ```
 
 **Stack:** Python 3.11+ (tested on 3.14) · FastAPI · LangGraph · httpx · ReportLab · vanilla ES modules + hand-rolled SVG
@@ -616,8 +616,19 @@ curl -X POST http://localhost:8000/api/evaluation/run \
   -H 'Content-Type: application/json' -d '{"mode":"demo","include_baseline":true}'
 
 curl http://localhost:8000/api/evaluation/metrics          # methodology + latest values
-curl "http://localhost:8000/api/evaluation/report?format=md" -o evaluation.md
+curl "http://localhost:8000/api/evaluation/report?format=pdf" -o evaluation.pdf
+curl "http://localhost:8000/api/evaluation/report?format=md"  -o evaluation.md
 ```
+
+The evaluation report exports as **PDF, Markdown, HTML or JSON** and contains the executive
+summary, methodology, scenario coverage, per-case results, baseline comparison, human review,
+failures, uncertainty and recovery cases, regression history and recommendations. The PDF reuses
+the existing report engine's document template and styles rather than adding a second one.
+
+**No model is used as a judge.** Every automated score is a checkable computation over the run's
+own evidence, so it is reproducible and traceable to the data that produced it — and it does not
+depend on provider availability. Semantic judgement comes from the human review layer, where it is
+attributed to a reviewer and its disagreement with the automated score is shown, not hidden.
 
 Modes: `demo`, `full`, `adversarial`, `single`, `repeated`, `scenario`.
 
@@ -627,7 +638,7 @@ Modes: `demo`, `full`, `adversarial`, `single`, `repeated`, `scenario`.
 
 ```bash
 cd backend && .venv/bin/python -m pytest tests/ -q
-# 149 passed  (111 core + 19 LangGraph framework + 19 evaluation)
+# 150 passed  (111 core + 19 LangGraph framework + 20 evaluation)
 ```
 
 Covers goal→plan, dynamic tool selection per goal, observation-driven adaptation, self-termination,
@@ -664,7 +675,7 @@ unchanged.
 | Intelligence dashboard with derived analytics | ✅ |
 | Intelligence Report — PDF / HTML / Markdown / JSON | ✅ |
 | Source provenance auditing | ✅ |
-| 149 automated tests | ✅ |
+| 150 automated tests | ✅ |
 | Public deployment | ❌ not yet — runs locally |
 | Scheduled autonomous re-runs | ❌ out of scope for the current tasks |
 | Multi-user accounts / persistence | ❌ runs are held in memory |

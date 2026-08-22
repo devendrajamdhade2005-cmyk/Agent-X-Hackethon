@@ -31,6 +31,7 @@ from ..evaluation.reports import (
     build_evaluation_report,
     render_evaluation_html,
     render_evaluation_markdown,
+    render_evaluation_pdf,
 )
 from ..evaluation.runner import MAX_REPEATS, SuiteRunner
 from ..evaluation.schemas import HumanEvaluation, Thresholds
@@ -237,6 +238,23 @@ async def evaluation_report(suite_id: str = "", format: str = "json") -> Any:
         )
     if fmt == "html":
         return HTMLResponse(render_evaluation_html(report))
+    if fmt == "pdf":
+        try:
+            data = render_evaluation_pdf(report)
+        except Exception as exc:  # noqa: BLE001 — never 500 on a formatting edge case
+            raise HTTPException(
+                status_code=500,
+                detail=f"could not render the evaluation PDF: {type(exc).__name__}: {exc}",
+            ) from exc
+        return Response(
+            content=data,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition":
+                    f'attachment; filename="InsightPulse-Evaluation-{report["suite_id"]}.pdf"',
+                "Content-Length": str(len(data)),
+            },
+        )
     return {"report": report}
 
 

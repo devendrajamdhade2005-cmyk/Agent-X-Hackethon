@@ -202,7 +202,7 @@ def render_evaluation_markdown(report: dict[str, Any]) -> str:
     else:
         lines.append(reg.get("reason", "No previous suite to compare against."))
 
-    lines += ["", "## Methodology", ""]
+    lines += ["", "## Metric methodology", ""]
     for spec in (report.get("methodology") or {}).get("metrics") or []:
         lines += [f"### {spec['label']}", "",
                   f"- **Definition:** {spec['definition']}",
@@ -214,6 +214,156 @@ def render_evaluation_markdown(report: dict[str, Any]) -> str:
     if recs:
         lines += ["## Recommendations", ""] + [f"- {r}" for r in recs]
     return "\n".join(lines)
+
+
+def render_evaluation_pdf(report: dict[str, Any]) -> bytes:
+    """PDF export, reusing the existing report engine's document shell and styles.
+
+    Only the section content is evaluation-specific; the page template, typography
+    and rules come from `app/reports/pdf.py` so there is one PDF engine, not two.
+    """
+    from reportlab.lib import colors
+    from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
+
+    from ..reports.pdf import LINE, _Doc, _heading, _rule, _styles
+
+    import io
+
+    doc_buffer = io.BytesIO()
+    # `_Doc` reads its title/subject from a report dict, so give it the evaluation
+    # equivalents rather than duplicating the document template.
+    doc = _Doc(doc_buffer, {
+        "report_id": str(report.get("suite_id") or ""),
+        "tracking_goal": f"Evaluation suite ({report.get('mode', 'suite')})",
+    })
+    s = _styles()
+    width = doc.width
+    flow: list[Any] = []
+
+    flow.append(Paragraph("InsightPulse — Evaluation Report", s["h1"]))
+    flow.append(Spacer(1, 6))
+    flow.append(Paragraph(
+        f"Suite {report.get('suite_id')} · mode {report.get('mode')} · "
+        f"generated {report.get('generated_from')}", s["meta"]))
+    flow.append(Spacer(1, 10))
+    flow.append(_rule(width))
+    flow.append(Spacer(1, 12))
+
+    _heading(flow, "1", "Executive summary", s, width)
+    flow.append(Paragraph(_x(report.get("executive_summary", "")), s["body"]))
+    flow.append(Spacer(1, 12))
+
+    _heading(flow, "2", "Results", s, width)
+    rows = [["Metric", "Value", "Direction"]]
+    for name, entry in (report.get("results") or {}).items():
+        if name == "overall_score" or not isinstance(entry, dict):
+            continue
+        if entry.get("available"):
+            rows.append([
+                name.replace("_", " "),
+                _fmt(entry.get("value"), entry.get("unit")),
+                "higher better" if entry.get("higher_is_better") else "lower better",
+            ])
+        else:
+            rows.append([name.replace("_", " "), "not measurable",
+                         _x(str(entry.get("unavailable_reason", ""))[:60])])
+    flow.append(_table(rows, width, Table, TableStyle, colors, LINE))
+    overall = (report.get("results") or {}).get("overall_score")
+    if isinstance(overall, (int, float)):
+        flow.append(Spacer(1, 8))
+        flow.append(Paragraph(f"<b>Overall score: {overall:.1%}</b>", s["body"]))
+    flow.append(Spacer(1, 12))
+
+    _heading(flow, "3", "Scenario coverage", s, width)
+    cov = [["Scenario", "Cases", "Pass", "Partial", "Fail", "Score"]]
+    for scenario, b in (report.get("scenario_coverage") or {}).items():
+        if not b.get("total"):
+            continue
+        cov.append([scenario.replace("_", " "), str(b["total"]), str(b["passed"]),
+                    str(b["partial"]), str(b["failed"]), f"{b['score']:.0%}"])
+    flow.append(_table(cov, width, Table, TableStyle, colors, LINE))
+    flow.append(Spacer(1, 12))
+
+    _heading(flow, "4", "Case results", s, width)
+    cases = [["Case", "Scenario", "Outcome", "Accuracy", "Grounded", "Halluc.", "Latency"]]
+    for c in report.get("case_results") or []:
+        cases.append([
+            c["case_id"], (c["scenario_type"] or "").replace("_", " "), c["outcome"],
+            _pct(c["accuracy"]), _pct(c["groundedness"]), _pct(c["hallucination"]),
+            _ms(c["latency_ms"]),
+        ])
+    flow.append(_table(cases, width, Table, TableStyle, colors, LINE))
+    flow.append(Spacer(1, 12))
+
+    section = 5
+    for system, comp in (report.get("baseline_comparison") or {}).items():
+        _heading(flow, str(section), f"Baseline — {system.replace('_', ' ')}", s, width)
+        section += 1
+        if comp.get("blocked"):
+            flow.append(Paragraph(
+                f"<b>Unavailable:</b> {_x(str(comp.get('blocked_reason', '')))}. "
+                f"{_x(str(comp.get('blocked_note', '')))}", s["body"]))
+            flow.append(Spacer(1, 6))
+        brows = [["Metric", "Baseline", "InsightPulse", "Diff", ""]]
+        for row in comp.get("rows") or []:
+            if row.get("available"):
+                brows.append([
+                    row["label"], _fmt(row["baseline"], row["unit"]),
+                    _fmt(row["insightpulse"], row["unit"]),
+                    _fmt(row["difference"], row["unit"]), row.get("direction", ""),
+                ])
+            else:
+                brows.append([row["label"], "n/a", "n/a", "—",
+                              _x(str(row.get("unavailable_reason", ""))[:40])])
+        flow.append(_table(brows, width, Table, TableStyle, colors, LINE))
+        flow.append(Spacer(1, 12))
+
+    failures = report.get("failures") or []
+    _heading(flow, str(section), "Failures and partial outcomes", s, width)
+    section += 1
+    if failures:
+        for f in failures:
+            flow.append(Paragraph(
+                f"<b>{f['case_id']} ({f['scenario_type']}) → {f['outcome']}</b> — "
+                f"{_x('; '.join(f.get('reasons') or []))}", s["body"]))
+            flow.append(Spacer(1, 4))
+    else:
+        flow.append(Paragraph("No case failed or returned a partial outcome.", s["body"]))
+    flow.append(Spacer(1, 12))
+
+    _heading(flow, str(section), "Metric methodology", s, width)
+    for spec in (report.get("methodology") or {}).get("metrics") or []:
+        flow.append(Paragraph(f"<b>{_x(spec['label'])}</b>", s["body"]))
+        flow.append(Paragraph(_x(spec["definition"]), s["small"]))
+        flow.append(Paragraph(f"Formula: {_x(spec['formula'])}", s["small"]))
+        flow.append(Spacer(1, 5))
+
+    doc.build(flow)
+    return doc_buffer.getvalue()
+
+
+def _table(rows: list[list[str]], width: float, Table, TableStyle, colors, LINE):
+    n = len(rows[0]) if rows else 1
+    t = Table(rows, colWidths=[width / n] * n, hAlign="LEFT")
+    t.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 7.4),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#475069")),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.6, LINE),
+        ("LINEBELOW", (0, 1), (-1, -2), 0.3, LINE),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    return t
+
+
+def _x(text: str) -> str:
+    """Escape for ReportLab's mini-markup."""
+    return (
+        str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    )
 
 
 def render_evaluation_html(report: dict[str, Any]) -> str:

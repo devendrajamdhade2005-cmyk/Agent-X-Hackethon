@@ -77,8 +77,9 @@ export function initEvaluation(host) {
         <div class="ev-buttons">
           <button type="button" class="btn-primary" id="ev-run">🧪 Run Evaluation Suite</button>
           <button type="button" class="btn-ghost" id="ev-stop" hidden>Stop</button>
-          <a class="btn-mini" id="ev-export-md" href="#" target="_blank" rel="noopener">↓ Report (MD)</a>
-          <a class="btn-mini" id="ev-export-html" href="#" target="_blank" rel="noopener">↓ Report (HTML)</a>
+          <a class="btn-mini" id="ev-export-pdf" href="#" target="_blank" rel="noopener">↓ PDF</a>
+          <a class="btn-mini" id="ev-export-md" href="#" target="_blank" rel="noopener">↓ Markdown</a>
+          <a class="btn-mini" id="ev-export-html" href="#" target="_blank" rel="noopener">↓ HTML</a>
         </div>
       </div>
       <p class="ev-status" id="ev-status">Loading evaluation data…</p>
@@ -112,6 +113,7 @@ async function refresh() {
 function render() {
   const m = state.metrics || {};
   const suiteId = m.latest_suite_id;
+  $("ev-export-pdf").href = api.evaluationReportUrl("pdf", suiteId || "");
   $("ev-export-md").href = api.evaluationReportUrl("md", suiteId || "");
   $("ev-export-html").href = api.evaluationReportUrl("html", suiteId || "");
 

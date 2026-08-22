@@ -455,6 +455,43 @@ def test_18_uncertainty_and_suite_aggregation():
     assert rob.details["weakest_category"] == "ADVERSARIAL"
 
 
+# ── extra: report export in every format ────────────────────
+def test_20_report_export_formats():
+    from app.evaluation.reports import (
+        build_evaluation_report,
+        render_evaluation_html,
+        render_evaluation_markdown,
+        render_evaluation_pdf,
+    )
+
+    store.reset()
+    suite = asyncio.run(
+        SuiteRunner(simulation_mode=True).run_suite(
+            mode="single", case_ids=["EVAL-001", "EVAL-009"], include_baseline=True,
+            baseline_systems=["baseline_pipeline"],
+        )
+    )
+    report = build_evaluation_report(suite)
+    # Structured payload carries the mandated sections.
+    for key in ("executive_summary", "methodology", "scenario_coverage", "results",
+                "case_results", "baseline_comparison", "reliability", "consistency",
+                "human_review", "failures", "uncertainty_cases", "recovery_cases",
+                "regression", "recommendations", "provenance"):
+        assert key in report, f"evaluation report is missing '{key}'"
+
+    md = render_evaluation_markdown(report)
+    assert "# InsightPulse — Evaluation Report" in md
+    assert "## Metric methodology" in md
+    # Unavailable metrics are explained in the export, never printed as a number.
+    assert "not comparable" in md or "not measurable" in md
+
+    html = render_evaluation_html(report)
+    assert html.startswith("<!DOCTYPE html>") and "Evaluation Report" in html
+
+    pdf = render_evaluation_pdf(report)
+    assert pdf[:4] == b"%PDF" and len(pdf) > 3000
+
+
 # ── extra: the full demo suite runs end to end ──────────────
 def test_19_demo_suite_end_to_end():
     store.reset()
