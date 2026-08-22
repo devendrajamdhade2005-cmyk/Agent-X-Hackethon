@@ -263,30 +263,3 @@ insightpulse/
 └── README.md
 ```
 
----
-
-## 📸 Screenshots / Demo
-
-> *(Add screenshots here as the UI is built)*
-
-- 🌐 **Live Demo:** *(add deployed URL here)*
-- 🎥 **Demo Video:** *(add recording link here)*
-
----
-
-## 🔮 Future Scope
-
-- 🌐 More data sources (X/Twitter, LinkedIn, company blog RSS)
-- 📊 Competitor comparison charts and trend timelines
-- 📈 Market opportunity and trend prediction
-- 🔔 Slack / Discord / Webhook alert delivery
-- 🌍 Multi-language source support
-- 📱 Mobile application
-- 🧠 Cross-source synthesis (linking a competitor's patent to a related research paper)
-- 🎯 Personalized recommendations based on user feedback
-
----
-
-## 📄 License
-
-MIT License — see [LICENSE](LICENSE) for details.
