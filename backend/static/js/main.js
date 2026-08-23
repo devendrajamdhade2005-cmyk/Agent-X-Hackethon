@@ -9,7 +9,7 @@
  */
 
 import * as api from "./core/api.js";
-import { $, countUp, delegate, esc, onVisible, qsa, setHTML, setText, show } from "./core/dom.js";
+import { $, countUp, delegate, esc, onVisible, qs, qsa, setHTML, setText, show } from "./core/dom.js";
 import {
   CATEGORY, PRIORITY, categoryIcon, categoryLabel, categoryOf,
   formatDate, pct, providerLabel, toolHuman, truncate,
@@ -230,7 +230,59 @@ function switchView(view) {
   }
 
   renderView(view);
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  scrollToView(view);
+}
+
+/**
+ * Bring the selected section into view instead of jumping to the page top.
+ *
+ * Scrolling to `top: 0` landed the user above the hero and the search panel, so
+ * every nav click looked like it had done nothing until you scrolled down. The
+ * offset matters too: the nav is `position: sticky`, so a section aligned to its
+ * exact top sits underneath the bar and loses its heading.
+ */
+function scrollToView(view) {
+  const section = qs(`[data-view="${view}"]`);
+  if (!section) return;
+
+  const align = () => {
+    const nav = qs(".nav");
+    // Measured, not hardcoded: the nav wraps to two rows on narrow screens.
+    const clearance = (nav ? nav.getBoundingClientRect().height : 0) + 12;
+    const target = section.getBoundingClientRect().top + window.scrollY - clearance;
+    const reduced = typeof window.matchMedia === "function"
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.scrollTo({
+      top: Math.max(0, Math.round(target)),
+      behavior: reduced ? "auto" : "smooth",
+    });
+  };
+
+  // #dash may have been revealed in this same tick for a self-driving view, so wait
+  // one frame for layout to settle — measuring before that yields 0 and we would
+  // scroll to the top again, which is the bug being fixed.
+  requestAnimationFrame(() => {
+    align();
+    if (typeof ResizeObserver !== "function") return;
+
+    // Framework, Evaluation and Observability fetch their content *after* the
+    // section is shown. Until it arrives the page can be too short to reach the
+    // target, so the browser clamps the scroll and the section ends up mid-screen.
+    // Re-align while the section is still growing — and stop the instant the user
+    // scrolls, so this never fights them for control.
+    let done = false;
+    const events = ["wheel", "touchstart", "keydown"];
+    const stop = () => {
+      if (done) return;
+      done = true;
+      observer.disconnect();
+      events.forEach((e) => window.removeEventListener(e, stop));
+    };
+    events.forEach((e) => window.addEventListener(e, stop, { passive: true }));
+    const observer = new ResizeObserver(() => { if (!done) align(); });
+    observer.observe(section);
+    setTimeout(stop, 2500);
+  });
 }
 
 function renderView(view) {

@@ -74,6 +74,10 @@ button{font:inherit}
   position:sticky;top:0;z-index:40;background:rgba(255,255,255,.86);
   backdrop-filter:saturate(180%) blur(14px);border-bottom:1px solid var(--line);
 }
+/* The nav is sticky, so any element scrolled into view must reserve room for it or
+   its heading ends up hidden behind the bar. Covers the scrollIntoView() call sites;
+   the nav-button path measures the bar at runtime because it can wrap to two rows. */
+#dash,[data-view],.view-head{scroll-margin-top:84px}
 .nav-inner{max-width:1420px;margin:0 auto;padding:10px 22px;display:flex;align-items:center;gap:18px}
 .brand{display:flex;align-items:center;gap:10px;flex:none;text-decoration:none;color:inherit}
 .brand:hover{text-decoration:none}
