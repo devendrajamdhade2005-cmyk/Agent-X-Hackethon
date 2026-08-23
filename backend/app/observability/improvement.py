@@ -221,6 +221,7 @@ class ComparisonEngine:
         after: dict[str, Any],
         primary_metric: str = "duration_ms",
         plan: ImprovementPlan | None = None,
+        observed_noise: float = 0.0,
     ) -> dict[str, Any]:
         rows: list[dict[str, Any]] = []
         keys = [k for k in METRIC_DIRECTION if k in before or k in after]
@@ -248,9 +249,11 @@ class ComparisonEngine:
                 ),
             })
 
-        verdict = self._verdict(before, after, primary_metric, rows)
+        verdict = self._verdict(before, after, primary_metric, rows, observed_noise)
         return {
             "primary_metric": primary_metric,
+            "noise_floor_used": verdict["floor"],
+            "observed_noise": observed_noise,
             "rows": rows,
             "improvement_verified": verdict["accepted"],
             "verdict": verdict["verdict"],
@@ -267,14 +270,20 @@ class ComparisonEngine:
         after: dict[str, Any],
         primary: str,
         rows: list[dict[str, Any]],
+        observed_noise: float = 0.0,
     ) -> dict[str, Any]:
         reasons: list[str] = []
         regressions: list[str] = []
 
+        # The floor is the larger of the configured minimum and the noise the
+        # workload actually showed. A constant alone would let variance be sold as
+        # an improvement on a workload noisier than the constant.
+        floor = max(float(MIN_LATENCY_GAIN_MS), float(observed_noise or 0.0))
+
         row = next((r for r in rows if r["metric"] == primary), None)
         if row is None or row.get("change") is None:
             return {
-                "accepted": False, "verdict": "NOT_MEASURABLE",
+                "accepted": False, "verdict": "NOT_MEASURABLE", "floor": floor,
                 "reasons": [f"the target metric '{primary}' was not measured in both runs"],
                 "quality_regressions": [],
             }
@@ -286,11 +295,13 @@ class ComparisonEngine:
 
         # Is the primary movement real, or noise?
         if primary == "duration_ms":
-            material = gain >= MIN_LATENCY_GAIN_MS
+            material = gain >= floor
             if not material:
                 reasons.append(
-                    f"latency moved by {gain:.0f}ms, below the {MIN_LATENCY_GAIN_MS}ms "
-                    f"floor treated as noise"
+                    f"latency moved by {gain:.0f}ms, which does not clear the "
+                    f"{floor:.0f}ms floor"
+                    + (f" (the workload itself varied by {observed_noise:.0f}ms "
+                       f"across repeats)" if observed_noise else "")
                 )
         else:
             material = relative >= MIN_RELATIVE_GAIN
@@ -339,6 +350,7 @@ class ComparisonEngine:
             return {
                 "accepted": False,
                 "verdict": "IMPROVEMENT_REJECTED",
+                "floor": floor,
                 "reasons": [
                     "the change was reverted because quality regressed beyond the "
                     "configured tolerance"
@@ -349,6 +361,7 @@ class ComparisonEngine:
             return {
                 "accepted": False,
                 "verdict": "NO_MATERIAL_CHANGE",
+                "floor": floor,
                 "reasons": reasons or ["the target metric did not move materially"],
                 "quality_regressions": [],
             }
@@ -357,11 +370,14 @@ class ComparisonEngine:
             0,
             f"{primary} improved by "
             + (f"{gain:.0f}ms" if primary == 'duration_ms' else f"{relative:.1%}")
-            + " with no quality regression beyond tolerance",
+            + " with no quality regression beyond tolerance"
+            + (f", clearing the {floor:.0f}ms noise floor measured for this workload"
+               if primary == "duration_ms" and observed_noise else ""),
         )
         return {
             "accepted": True,
             "verdict": "IMPROVEMENT_VERIFIED",
+            "floor": floor,
             "reasons": reasons,
             "quality_regressions": [],
         }

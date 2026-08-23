@@ -554,6 +554,52 @@ def test_31_noise_level_change_is_not_called_an_improvement():
     assert missing["verdict"] == "NOT_MEASURABLE"
 
 
+def test_42_acceptance_floor_rises_to_the_measured_noise():
+    """A gain smaller than the workload's own variance must not be accepted.
+
+    The workload was measured at roughly 80ms standard deviation and spreads of
+    several hundred ms, so a fixed 50ms floor would let variance be sold as an
+    improvement. The floor is therefore the larger of the constant and the spread
+    actually observed across the repeats.
+    """
+    engine = ComparisonEngine()
+
+    # A 200ms gain on a workload that varied by 600ms proves nothing.
+    noisy = engine.compare(
+        before={"duration_ms": 1000, "groundedness": 0.9},
+        after={"duration_ms": 800, "groundedness": 0.9},
+        primary_metric="duration_ms", observed_noise=600,
+    )
+    assert noisy["verdict"] == "NO_MATERIAL_CHANGE"
+    assert noisy["noise_floor_used"] == 600
+    assert "600ms" in " ".join(noisy["reasons"])
+
+    # The same gain on a quiet workload is real.
+    quiet = engine.compare(
+        before={"duration_ms": 1000, "groundedness": 0.9},
+        after={"duration_ms": 800, "groundedness": 0.9},
+        primary_metric="duration_ms", observed_noise=10,
+    )
+    assert quiet["verdict"] == "IMPROVEMENT_VERIFIED"
+    # Never drops below the configured minimum, however quiet the workload looks.
+    assert quiet["noise_floor_used"] == MIN_LATENCY_GAIN_MS
+
+
+def test_43_the_loop_measures_each_side_more_than_once():
+    report = cycle_report()
+    s = report["sampling"]
+    assert s["repeats"] > 1, "a single sample per side cannot separate gain from noise"
+    assert len(s["before_samples_ms"]) == s["repeats"]
+    assert len(s["after_samples_ms"]) == s["repeats"]
+    # The compared numbers must be the medians of the samples, not one lucky run.
+    assert report["before_metrics"]["duration_ms"] == float(s["before_median_ms"])
+    assert report["after_metrics"]["duration_ms"] == float(s["after_median_ms"])
+    # Noise is the worse of the two within-side spreads.
+    assert s["observed_noise_ms"] == max(s["before_spread_ms"], s["after_spread_ms"])
+    assert report["comparison"]["noise_floor_used"] >= MIN_LATENCY_GAIN_MS
+    assert report["comparison"]["noise_floor_used"] >= s["observed_noise_ms"]
+
+
 def test_32_rising_errors_or_falling_success_block_acceptance():
     worse_errors = ComparisonEngine().compare(
         before={"duration_ms": 1500, "errors": 1},

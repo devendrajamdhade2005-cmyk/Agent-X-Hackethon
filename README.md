@@ -418,7 +418,7 @@ backend/
 │   ├── reports/               builder, HTML, PDF, Markdown
 │   └── services/              activity logger (per-agent, typed events)
 ├── static/                    dashboard (vanilla ES modules, no build step)
-└── tests/                     199 tests
+└── tests/                     201 tests
 ```
 
 **Stack:** Python 3.11+ (tested on 3.14) · FastAPI · LangGraph · httpx · ReportLab · vanilla ES modules + hand-rolled SVG
@@ -738,10 +738,27 @@ A change is kept only when the targeted metric improves **and** no quality metri
 is judged by the **Task 6 evaluators**, not by this module's own opinion. Verdicts:
 
 `IMPROVEMENT_VERIFIED` · `IMPROVEMENT_REJECTED` (quality regressed, errors rose, or task success
-fell → auto-revert) · `NO_MATERIAL_CHANGE` (below the noise floor: 50ms latency / 5% relative) ·
+fell → auto-revert) · `NO_MATERIAL_CHANGE` (gain did not clear the noise floor) ·
 `NOT_MEASURABLE` · `NO_SAFE_IMPROVEMENT` · `NO_DIAGNOSIS`
 
 Metric direction is **declared** per metric, never inferred from the sign of a difference.
+
+**The noise floor is measured, not assumed.** A single before/after pair cannot tell a real gain from
+run-to-run variance. Measuring the same scenario six times with no change applied gave a 204ms
+spread and 81ms standard deviation — so a fixed 50ms threshold would happily sell variance as an
+improvement. Each side is therefore run three times (`repeats`, 1–5), compared on **medians**, and
+the gain must exceed the larger of 50ms and the spread the workload actually showed:
+
+```
+sampling  : 3x/side  before=[8998, 8999, 9001]  after=[8999, 9002, 9004]
+            medians 8999 -> 9002ms   observed noise 5ms
+floor used: 50ms
+VERDICT   : NO_MATERIAL_CHANGE   -> policy reverted to v1
+```
+
+This is deliberately conservative: it will occasionally reject a real but small gain rather than
+risk claiming one that isn't there. `sampling.observed_noise_ms` and `comparison.noise_floor_used`
+are reported on every cycle so the verdict can be audited.
 
 ### Verified demo run
 
@@ -797,6 +814,12 @@ present one as settled, caps confidence at 60% and flags `validation_required`. 
 strongest candidate's fix and then *measures* whether it helped — which is the point of validating
 empirically rather than trusting the diagnosis.
 
+**Absolute latencies inside a controlled-failure cycle are higher than a normal run.** Arming a
+fault routes the target provider through the real request path, so its genuine rate limiter applies
+for the rest of the run — `semantic_scholar` allows 20/min, which is one token every 3s. That
+inflates before *and* after equally, so the comparison stays fair; it is why a cycle can report
+`11999ms → 9000ms` where an unarmed run of the same goal takes about a second.
+
 Running the cycle a second time correctly refuses to invent another change:
 
 ```
@@ -812,7 +835,7 @@ choose  rejected  No change available: semantic_scholar already retries only 1 t
 
 curl -X POST http://localhost:8000/api/observability/improve \
   -H 'Content-Type: application/json' \
-  -d '{"target_source":"semantic_scholar","failure_type":"rate_limit","failure_count":2}'
+  -d '{"target_source":"semantic_scholar","failure_type":"rate_limit","failure_count":2,"repeats":3}'
 
 curl http://localhost:8000/api/observability/traces              # recent traces
 curl http://localhost:8000/api/observability/traces/{id}/tree    # hierarchical timeline
@@ -850,7 +873,7 @@ injected errors, and produces exactly what it did before this task.
 
 ```bash
 cd backend && .venv/bin/python -m pytest tests/ -q
-# 199 passed  (111 core + 19 LangGraph framework + 28 evaluation + 41 observability)
+# 201 passed  (111 core + 19 LangGraph framework + 28 evaluation + 43 observability)
 ```
 
 Covers goal→plan, dynamic tool selection per goal, observation-driven adaptation, self-termination,
@@ -892,7 +915,7 @@ unchanged.
 | Automatic root-cause diagnosis with evidence-weighted confidence | ✅ |
 | Versioned, reversible improvement engine (runtime config, never code rewrite) | ✅ |
 | Same-scenario re-run with Task 6 validated before/after and accept/reject | ✅ |
-| 199 automated tests | ✅ |
+| 201 automated tests | ✅ |
 | Public deployment | ❌ not yet — runs locally |
 | Scheduled autonomous re-runs | ❌ out of scope for the current tasks |
 | Multi-user accounts / persistence | ❌ runs are held in memory |

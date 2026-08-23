@@ -40,6 +40,11 @@ DEFAULT_FAILURE = "rate_limit"
 DEFAULT_FAILURE_COUNT = 2
 DEFAULT_CASE_ID = "EVAL-001"
 
+# How many times each side of the comparison is run. Two is the minimum that
+# produces a measurable spread; the cap keeps a cycle demoable.
+DEFAULT_REPEATS = 3
+MAX_REPEATS = 5
+
 # Runtime metrics lifted from a run result for comparison. Names match
 # `improvement.METRIC_DIRECTION` so direction is always explicit.
 _RUNTIME_METRICS = {
@@ -84,9 +89,18 @@ class SelfImprovementLoop:
         primary_metric: str = "duration_ms",
         simulation_mode: bool = True,
         validate_with_evaluation: bool = True,
+        repeats: int = DEFAULT_REPEATS,
         emit: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
-        """Run the whole cycle and return every stage's real result."""
+        """Run the whole cycle and return every stage's real result.
+
+        `repeats` is why the verdict can be trusted. A single before/after pair
+        cannot distinguish a real gain from run-to-run variance — measured at
+        roughly 80ms standard deviation on this workload, dominated by the model
+        call. Each side is therefore run `repeats` times, compared on medians, and
+        the acceptance floor is raised to the *observed* spread rather than a
+        constant. One repeat is allowed but reports itself as unqualified.
+        """
         case = self._case(case_id)
         cycle_id = f"cyc-{uuid.uuid4().hex[:10]}"
         scenario = f"controlled_failure:{target_source}:{failure_type}"
@@ -110,10 +124,10 @@ class SelfImprovementLoop:
         # ── 1. TRACE: run with the controlled failure armed ──
         event("cycle_started", scenario=scenario, target=target_source,
               failure_type=failure_type, failure_count=failure_count)
-        before_result, before_trace = await self._traced_run(
+        before_result, before_trace, before_repeats = await self._repeated_runs(
             case, scenario=scenario, label="before", target_source=target_source,
             failure_type=failure_type, failure_count=failure_count,
-            simulation_mode=simulation_mode,
+            simulation_mode=simulation_mode, repeats=repeats,
         )
         report["before_trace_id"] = before_trace.get("trace_id", "")
         report["before_run_id"] = before_result.get("run_id", "")
@@ -188,10 +202,10 @@ class SelfImprovementLoop:
 
         # ── 6. RE-RUN the same scenario ──
         try:
-            after_result, after_trace = await self._traced_run(
+            after_result, after_trace, after_repeats = await self._repeated_runs(
                 case, scenario=scenario, label="after", target_source=target_source,
                 failure_type=failure_type, failure_count=failure_count,
-                simulation_mode=simulation_mode,
+                simulation_mode=simulation_mode, repeats=repeats,
             )
         except Exception as exc:  # noqa: BLE001 — a failed re-run must roll back
             self.improver.revert(plan)
@@ -226,19 +240,34 @@ class SelfImprovementLoop:
             "before": before_eval,
             "after": after_eval,
         }
-        event("metrics_collected", validated=validate_with_evaluation)
+
+        # Replace the single-sample latency with the median of the repeats, and
+        # measure how much the workload varies on its own. That spread — not a
+        # constant — is what the gain has to beat.
+        sampling = self._sampling(before_repeats, after_repeats)
+        report["sampling"] = sampling
+        if sampling["repeats"] > 1:
+            before_metrics["duration_ms"] = float(sampling["before_median_ms"])
+            after_metrics["duration_ms"] = float(sampling["after_median_ms"])
+
+        event("metrics_collected", validated=validate_with_evaluation,
+              repeats=sampling["repeats"], noise_ms=sampling["observed_noise_ms"])
         report["stages"].append({
             "stage": "measure", "status": "done",
-            "detail": ("scored by the Task 6 evaluators"
-                       if validate_with_evaluation else
-                       "runtime metrics only (evaluation validation disabled)"),
+            "detail": (
+                f"{sampling['repeats']}x per side, median compared; "
+                f"observed noise {sampling['observed_noise_ms']}ms"
+                + ("; scored by the Task 6 evaluators" if validate_with_evaluation else "")
+            ),
         })
 
         # ── 8. VERIFY, then accept or roll back ──
         verdict = self.comparison.compare(
             before=before_metrics, after=after_metrics,
             primary_metric=primary_metric, plan=plan,
+            observed_noise=sampling["observed_noise_ms"],
         )
+        verdict["sampling"] = sampling
         report["comparison"] = verdict
         report["verdict"] = verdict["verdict"]
         report["improvement_verified"] = verdict["improvement_verified"]
@@ -268,6 +297,44 @@ class SelfImprovementLoop:
         return report
 
     # ─────────────────────────────────────────────────────────
+    async def _repeated_runs(
+        self,
+        case: Any,
+        *,
+        scenario: str,
+        label: str,
+        target_source: str,
+        failure_type: str,
+        failure_count: int,
+        simulation_mode: bool,
+        repeats: int,
+    ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+        """Run the scenario `repeats` times and return the median-latency run.
+
+        The median run is the one reported and traced, so the trace shown in the
+        dashboard is a real run rather than a synthetic average. The full sample is
+        returned so the spread can be used as the acceptance floor.
+        """
+        repeats = max(1, min(int(repeats), MAX_REPEATS))
+        samples: list[dict[str, Any]] = []
+        for index in range(repeats):
+            result, trace = await self._traced_run(
+                case, scenario=scenario, label=f"{label}{index + 1}" if repeats > 1 else label,
+                target_source=target_source, failure_type=failure_type,
+                failure_count=failure_count, simulation_mode=simulation_mode,
+            )
+            samples.append({
+                "index": index,
+                "result": result,
+                "trace": trace,
+                "duration_ms": int((result.get("metrics") or {}).get("duration_ms") or 0),
+                "trace_id": result.get("trace_id", ""),
+            })
+
+        ordered = sorted(samples, key=lambda s: s["duration_ms"])
+        chosen = ordered[len(ordered) // 2]
+        return chosen["result"], chosen["trace"], samples
+
     async def _traced_run(
         self,
         case: Any,
@@ -304,6 +371,42 @@ class SelfImprovementLoop:
 
         trace = local_provider.get(str(result.get("trace_id") or "")) or {}
         return result, trace
+
+    def _sampling(
+        self, before: list[dict[str, Any]], after: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Summarise the repeats and the noise they revealed."""
+        import statistics
+
+        b = sorted(s["duration_ms"] for s in before)
+        a = sorted(s["duration_ms"] for s in after)
+        repeats = min(len(b), len(a))
+
+        def median(xs: list[int]) -> int:
+            return int(statistics.median(xs)) if xs else 0
+
+        # Noise is the larger of the two within-side spreads: if a side varies by
+        # 200ms on its own, a 200ms "gain" proves nothing.
+        spread_before = (max(b) - min(b)) if len(b) > 1 else 0
+        spread_after = (max(a) - min(a)) if len(a) > 1 else 0
+        noise = max(spread_before, spread_after)
+        return {
+            "repeats": repeats,
+            "before_samples_ms": b,
+            "after_samples_ms": a,
+            "before_median_ms": median(b),
+            "after_median_ms": median(a),
+            "before_spread_ms": spread_before,
+            "after_spread_ms": spread_after,
+            "observed_noise_ms": noise,
+            "qualified": repeats > 1,
+            "note": (
+                f"each side run {repeats}x; medians compared; the gain must exceed the "
+                f"observed {noise}ms spread, not a fixed constant"
+                if repeats > 1 else
+                "a single run per side — the verdict is not qualified against noise"
+            ),
+        }
 
     async def _metrics(
         self, case: Any, result: dict[str, Any], trace: dict[str, Any], *, validate: bool

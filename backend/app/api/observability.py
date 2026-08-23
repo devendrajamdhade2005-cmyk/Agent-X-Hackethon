@@ -40,7 +40,9 @@ from ..observability.loop import (
     DEFAULT_CASE_ID,
     DEFAULT_FAILURE,
     DEFAULT_FAILURE_COUNT,
+    DEFAULT_REPEATS,
     DEFAULT_TARGET,
+    MAX_REPEATS,
     loop,
 )
 from ..observability.policy import BOUNDS, IMPROVEMENT_TYPES, registry as policy_registry
@@ -117,6 +119,9 @@ class ImproveRequest(BaseModel):
     primary_metric: str = Field(default="duration_ms")
     simulation_mode: bool = True
     validate_with_evaluation: bool = True
+    # Runs per side. More repeats measure the workload's own variance more tightly,
+    # so the acceptance floor is better grounded.
+    repeats: int = Field(default=DEFAULT_REPEATS, ge=1, le=MAX_REPEATS)
 
     @field_validator("failure_type")
     @classmethod
@@ -440,6 +445,7 @@ async def improve(payload: ImproveRequest) -> dict[str, Any]:
         primary_metric=payload.primary_metric,
         simulation_mode=payload.simulation_mode,
         validate_with_evaluation=payload.validate_with_evaluation,
+        repeats=payload.repeats,
     )
     _remember_cycle(report)
     return report
@@ -470,6 +476,7 @@ async def improve_stream(payload: ImproveRequest) -> StreamingResponse:
                 primary_metric=payload.primary_metric,
                 simulation_mode=payload.simulation_mode,
                 validate_with_evaluation=payload.validate_with_evaluation,
+                repeats=payload.repeats,
                 emit=emit,
             )
         finally:
