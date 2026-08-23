@@ -25,6 +25,7 @@ from ..config import settings
 from ..security import clean_terms, clean_text
 from ..sources.resilience import registry as resilience_registry
 from ..tools.registry import tool_registry
+from .guard import ConcurrencyGate, limit_run
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
@@ -146,16 +147,18 @@ class RunResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────
 # Routes
 # ─────────────────────────────────────────────────────────────
-@router.post("/run", response_model=RunResponse, dependencies=[Depends(require_token)])
+@router.post("/run", response_model=RunResponse,
+             dependencies=[Depends(require_token), Depends(limit_run)])
 async def run_agent_endpoint(payload: RunRequest) -> dict[str, Any]:
     """Run the full reason → decide → act → observe loop and return everything."""
-    agent = InsightPulseAgent(simulation_mode=payload.simulation_mode)
-    result = await agent.run(payload.to_agent_request())
+    async with ConcurrencyGate("agent run"):
+        agent = InsightPulseAgent(simulation_mode=payload.simulation_mode)
+        result = await agent.run(payload.to_agent_request())
     _remember(result)
     return result.to_dict()
 
 
-@router.post("/run/stream", dependencies=[Depends(require_token)])
+@router.post("/run/stream", dependencies=[Depends(require_token), Depends(limit_run)])
 async def run_agent_stream(payload: RunRequest) -> StreamingResponse:
     """Same run, but each activity entry is pushed as it happens (SSE).
 
@@ -167,7 +170,10 @@ async def run_agent_stream(payload: RunRequest) -> StreamingResponse:
 
     async def producer() -> AgentRunResult:
         try:
-            return await agent.run(payload.to_agent_request())
+            # The gate is held only for the run itself, so a slow client reading the
+            # stream never occupies a concurrency slot after the work is done.
+            async with ConcurrencyGate("agent run"):
+                return await agent.run(payload.to_agent_request())
         finally:
             await queue.put({"type": "__eof__"})
 

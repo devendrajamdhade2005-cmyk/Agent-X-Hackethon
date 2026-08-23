@@ -32,6 +32,23 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     access_token_ttl_minutes: int = 60 * 24 * 7
 
+    # ── inbound abuse protection ────────────────────────────
+    # The run endpoints call metered third-party APIs, and the hosted demo runs
+    # without a token so a reviewer needs no setup. These bound what one anonymous
+    # caller can spend. Generous enough for real use; set a limit to 0 to disable.
+    rate_limit_enabled: bool = True
+    rate_limit_run_requests: int = 20          # agent/graph runs …
+    rate_limit_run_window_seconds: int = 300   # … per IP per 5 minutes
+    rate_limit_heavy_requests: int = 6         # evaluation suites / improvement cycles …
+    rate_limit_heavy_window_seconds: int = 900  # … per IP per 15 minutes
+    # Concurrent runs allowed process-wide. Each one holds an HTTP client, an LLM
+    # client and a memory manager, so this is the real guard on container memory.
+    max_concurrent_runs: int = 4
+    max_concurrent_wait_seconds: int = 20
+    # Reject oversized request bodies before parsing them. 256 KB is far above any
+    # legitimate payload (the largest field is a 600-character goal).
+    max_request_bytes: int = 262_144
+
     # ── llm ─────────────────────────────────────────────────
     # auto → gemini if GEMINI_API_KEY is set, else anthropic, else heuristic.
     llm_provider: str = "auto"

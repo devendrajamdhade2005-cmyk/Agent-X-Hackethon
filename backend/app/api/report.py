@@ -26,6 +26,7 @@ from ..reports.builder import build_report
 from ..reports.html import render_html
 from ..reports.markdown import render_markdown
 from .agent import get_stored_run, latest_stored_run, require_token
+from .guard import limit_run
 
 router = APIRouter(prefix="/api/report", tags=["report"])
 
@@ -67,7 +68,7 @@ def _filename(report: dict[str, Any], ext: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────
-@router.post("/generate", dependencies=[Depends(require_token)])
+@router.post("/generate", dependencies=[Depends(require_token), Depends(limit_run)])
 async def generate(payload: GenerateRequest) -> dict[str, Any]:
     run = _resolve_run(payload.run_id)
     run_id = run.get("run_id", "")

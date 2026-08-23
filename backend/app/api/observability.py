@@ -49,6 +49,7 @@ from ..observability.policy import BOUNDS, IMPROVEMENT_TYPES, registry as policy
 from ..observability.providers import local_provider
 from ..observability.schemas import ERROR_CATEGORIES, ROOT_CAUSES, SPAN_KINDS
 from .agent import require_token
+from .guard import limit_heavy
 
 router = APIRouter(prefix="/api/observability", tags=["observability"])
 
@@ -434,7 +435,7 @@ async def controlled_failure(payload: ControlledFailureRequest) -> dict[str, Any
 # ─────────────────────────────────────────────────────────────
 # The cycle
 # ─────────────────────────────────────────────────────────────
-@router.post("/improve", dependencies=[Depends(require_token)])
+@router.post("/improve", dependencies=[Depends(require_token), Depends(limit_heavy)])
 async def improve(payload: ImproveRequest) -> dict[str, Any]:
     """Run the full cycle and return every stage's measured result."""
     report = await loop.execute(
@@ -451,7 +452,7 @@ async def improve(payload: ImproveRequest) -> dict[str, Any]:
     return report
 
 
-@router.post("/improve/stream", dependencies=[Depends(require_token)])
+@router.post("/improve/stream", dependencies=[Depends(require_token), Depends(limit_heavy)])
 async def improve_stream(payload: ImproveRequest) -> StreamingResponse:
     """Stream the cycle stage by stage, then the full report (SSE).
 

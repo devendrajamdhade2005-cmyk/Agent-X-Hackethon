@@ -37,6 +37,7 @@ from ..evaluation.runner import MAX_REPEATS, SuiteRunner
 from ..evaluation.schemas import HumanEvaluation, Thresholds
 from ..security import clean_text
 from .agent import require_token
+from .guard import limit_heavy
 
 router = APIRouter(prefix="/api/evaluation", tags=["evaluation"])
 
@@ -147,6 +148,26 @@ async def get_metrics() -> dict[str, Any]:
     }
 
 
+def _metric_cell(metric: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Reduce a scored metric to what a results row needs.
+
+    A full metric carries its definition and formula, which are identical for every
+    run in a suite. Repeating that prose per run per metric was most of this
+    response — seven metrics across ten runs duplicated the same methodology text
+    seventy times. The definitions are served once by `/metrics` (`methodology`),
+    which is where the UI reads them from, so the per-row payload only needs the
+    measurement itself and the reason when there isn't one.
+    """
+    if not isinstance(metric, dict):
+        return None
+    return {
+        "value": metric.get("value"),
+        "unit": metric.get("unit"),
+        "available": metric.get("available", False),
+        "unavailable_reason": metric.get("unavailable_reason", ""),
+    }
+
+
 @router.get("/runs")
 async def list_runs() -> dict[str, Any]:
     latest = store.latest_suite()
@@ -168,7 +189,7 @@ async def list_runs() -> dict[str, Any]:
                 "agent_run_id": r.get("agent_run_id"),
                 "gate_failures": r.get("gate_failures"),
                 "metrics": {
-                    name: (r.get("metrics") or {}).get(name)
+                    name: _metric_cell((r.get("metrics") or {}).get(name))
                     for name in (M.ACCURACY, M.TASK_COMPLETION, M.GROUNDEDNESS,
                                  M.HALLUCINATION_RATE, M.RECOVERY_RATE,
                                  M.EVIDENCE_QUALITY, M.LATENCY)
@@ -276,7 +297,7 @@ async def human_queue() -> dict[str, Any]:
 # ─────────────────────────────────────────────────────────────
 # Writes
 # ─────────────────────────────────────────────────────────────
-@router.post("/run", dependencies=[Depends(require_token)])
+@router.post("/run", dependencies=[Depends(require_token), Depends(limit_heavy)])
 async def run_evaluation(payload: RunRequest) -> dict[str, Any]:
     """Execute an evaluation suite against the real agent and return the result."""
     runner = _runner(payload)
@@ -291,7 +312,7 @@ async def run_evaluation(payload: RunRequest) -> dict[str, Any]:
     )
 
 
-@router.post("/repeat", dependencies=[Depends(require_token)])
+@router.post("/repeat", dependencies=[Depends(require_token), Depends(limit_heavy)])
 async def repeat_case(payload: RepeatRequest) -> dict[str, Any]:
     """Repeated-run mode: reliability and consistency for one case."""
     if dataset.get_case(payload.case_id) is None:
@@ -332,7 +353,7 @@ async def submit_human_review(payload: HumanReviewRequest) -> dict[str, Any]:
 # ─────────────────────────────────────────────────────────────
 # SSE (live suite progress)
 # ─────────────────────────────────────────────────────────────
-@router.post("/run/stream", dependencies=[Depends(require_token)])
+@router.post("/run/stream", dependencies=[Depends(require_token), Depends(limit_heavy)])
 async def run_evaluation_stream(payload: RunRequest) -> StreamingResponse:
     queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
     runner = _runner(payload, queue=queue)

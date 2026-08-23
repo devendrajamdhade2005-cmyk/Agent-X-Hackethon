@@ -25,6 +25,7 @@ from ..graph.adversarial import AdversarialConfig
 from ..graph.runner import run_graph
 from ..security import clean_terms, clean_text
 from .agent import remember_dict, require_token
+from .guard import ConcurrencyGate, limit_run
 
 router = APIRouter(prefix="/api/agent/graph", tags=["agent-framework"])
 
@@ -71,29 +72,30 @@ class GraphRunRequest(BaseModel):
 # ─────────────────────────────────────────────────────────────
 # Routes
 # ─────────────────────────────────────────────────────────────
-@router.post("/run", dependencies=[Depends(require_token)])
+@router.post("/run", dependencies=[Depends(require_token), Depends(limit_run)])
 async def graph_run(payload: GraphRunRequest) -> dict[str, Any]:
     """Run the full LangGraph orchestration and return everything."""
-    result = await run_graph(
-        payload.goal,
-        keywords=payload.keywords,
-        competitors=payload.competitors,
-        topics=payload.topics,
-        simulation_mode=payload.simulation_mode,
-        max_iterations=payload.max_iterations,
-        adversarial=payload.resolve_adversarial(),
-    )
+    async with ConcurrencyGate("graph run"):
+        result = await run_graph(
+            payload.goal,
+            keywords=payload.keywords,
+            competitors=payload.competitors,
+            topics=payload.topics,
+            simulation_mode=payload.simulation_mode,
+            max_iterations=payload.max_iterations,
+            adversarial=payload.resolve_adversarial(),
+        )
     remember_dict(result)
     return result
 
 
-@router.post("/run/stream", dependencies=[Depends(require_token)])
+@router.post("/run/stream", dependencies=[Depends(require_token), Depends(limit_run)])
 async def graph_run_stream(payload: GraphRunRequest) -> StreamingResponse:
     """Same run, streaming each framework event as it happens (SSE)."""
     return _stream(payload)
 
 
-@router.post("/adversarial", dependencies=[Depends(require_token)])
+@router.post("/adversarial", dependencies=[Depends(require_token), Depends(limit_run)])
 async def graph_adversarial(payload: GraphRunRequest) -> StreamingResponse:
     """Run a named adversarial scenario with streaming events."""
     payload.adversarial = True
@@ -156,16 +158,18 @@ def _stream(payload: GraphRunRequest) -> StreamingResponse:
 
     async def producer() -> dict[str, Any]:
         try:
-            return await run_graph(
-                payload.goal,
-                keywords=payload.keywords,
-                competitors=payload.competitors,
-                topics=payload.topics,
-                simulation_mode=payload.simulation_mode,
-                max_iterations=payload.max_iterations,
-                adversarial=adversarial,
-                queue=queue,
-            )
+            # Held for the run only, so a slow SSE reader does not keep a slot.
+            async with ConcurrencyGate("graph run"):
+                return await run_graph(
+                    payload.goal,
+                    keywords=payload.keywords,
+                    competitors=payload.competitors,
+                    topics=payload.topics,
+                    simulation_mode=payload.simulation_mode,
+                    max_iterations=payload.max_iterations,
+                    adversarial=adversarial,
+                    queue=queue,
+                )
         finally:
             await queue.put({"type": "__eof__"})
 
