@@ -38,6 +38,41 @@ from .state import GraphState
 # Hard step ceiling in addition to the governor and progress monitor (section 24).
 RECURSION_LIMIT = 60
 
+# Node name → node function. Registering from a table lets the observability layer
+# wrap every node once, instead of each node having to know it is being traced.
+NODE_FUNCTIONS: dict[str, Any] = {
+    "understand": nodes.understand_node,
+    "plan": nodes.plan_node,
+    "decompose": nodes.decompose_node,
+    "resource_check": nodes.resource_check_node,
+    "dispatch": nodes.dispatch_node,
+    "research_agent": nodes.research_agent_node,
+    "competitive_agent": nodes.competitive_agent_node,
+    "observer": nodes.observer_node,
+    "conflict_resolution": nodes.conflict_resolution_node,
+    "self_evaluator": nodes.self_evaluator_node,
+    "verify": nodes.verify_node,
+    "replan": nodes.replan_node,
+    "finalize": nodes.finalize_node,
+    "memory_update": nodes.memory_update_node,
+}
+
+
+def _register(g: StateGraph) -> None:
+    """Add every node, traced when observability is importable.
+
+    Tracing is a wrapper, not a rewrite: if the observability package is missing or
+    raises at import, the graph is built with the bare node functions and the run
+    proceeds exactly as before.
+    """
+    try:
+        from ..observability.instrument import traced_node
+    except Exception:  # noqa: BLE001 — never let instrumentation block the graph
+        traced_node = None  # type: ignore[assignment]
+
+    for name, fn in NODE_FUNCTIONS.items():
+        g.add_node(name, traced_node(name, fn) if traced_node else fn)
+
 
 def build_graph(checkpointer: Any | None = None, *, interrupt_before: list[str] | None = None):
     """Construct and compile the InsightPulse agent graph.
@@ -46,20 +81,7 @@ def build_graph(checkpointer: Any | None = None, *, interrupt_before: list[str] 
     and test checkpoint interruption + resume)."""
     g = StateGraph(GraphState)
 
-    g.add_node("understand", nodes.understand_node)
-    g.add_node("plan", nodes.plan_node)
-    g.add_node("decompose", nodes.decompose_node)
-    g.add_node("resource_check", nodes.resource_check_node)
-    g.add_node("dispatch", nodes.dispatch_node)
-    g.add_node("research_agent", nodes.research_agent_node)
-    g.add_node("competitive_agent", nodes.competitive_agent_node)
-    g.add_node("observer", nodes.observer_node)
-    g.add_node("conflict_resolution", nodes.conflict_resolution_node)
-    g.add_node("self_evaluator", nodes.self_evaluator_node)
-    g.add_node("verify", nodes.verify_node)
-    g.add_node("replan", nodes.replan_node)
-    g.add_node("finalize", nodes.finalize_node)
-    g.add_node("memory_update", nodes.memory_update_node)
+    _register(g)
 
     g.add_edge(START, "understand")
     g.add_edge("understand", "plan")

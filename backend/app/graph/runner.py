@@ -18,6 +18,9 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from ..agents.insight_generator import HIGH, LOW, MEDIUM
 from ..config import settings
+from ..observability.controlled_failure import set_current_run
+from ..observability.policy import registry as policy_registry
+from ..observability.tracer import get_tracer, reset_span_stack
 from ..services.activity_logger import ActivityLogger
 from ..sources.registry import build_http_client, registry as source_registry
 from ..tools.base import ToolContext
@@ -74,10 +77,16 @@ async def run_graph(
     thread_id: str | None = None,
     checkpointer: Any = None,
     on_event: Any = None,
+    scenario: str = "normal",
+    run_id: str | None = None,
 ) -> dict[str, Any]:
-    """Run the agent graph end to end and return a UI/report-compatible result."""
+    """Run the agent graph end to end and return a UI/report-compatible result.
+
+    `scenario` labels the trace so two runs of the same scenario can be compared;
+    `run_id` lets a caller pre-arm a controlled failure against a known id.
+    """
     started = time.perf_counter()
-    run_id = uuid.uuid4().hex[:12]
+    run_id = run_id or uuid.uuid4().hex[:12]
     thread_id = thread_id or run_id
     sim = settings.simulation_mode if simulation_mode is None else simulation_mode
 
@@ -86,6 +95,22 @@ async def run_graph(
 
     logger = ActivityLogger(run_id, queue=queue, sink=on_event)
     logger.start(goal, run_id=run_id)
+
+    # ── observability: one trace per run, rooted here ──
+    # `scenario` labels the run so a before/after pair can be found and compared
+    # later; the controlled-failure controller is keyed on run_id so an injection
+    # armed for this run cannot leak into a concurrent normal one.
+    reset_span_stack()
+    tracer = get_tracer(
+        run_id=run_id, goal=goal, thread_id=thread_id,
+        scenario=scenario or "normal",
+        scenario_config={"simulation_mode": sim, "adversarial": bool(adv)},
+        optimization_version=policy_registry.version,
+        root_operation="agent_run",
+    )
+    set_current_run(run_id)
+    root_span = tracer.start_span("agent_run", "run", goal_chars=len(goal or ""),
+                                  simulation_mode=sim, thread_id=thread_id)
 
     engine = GraphEngine(
         run_id=run_id, thread_id=thread_id, logger=logger,
@@ -108,6 +133,7 @@ async def run_graph(
     )
 
     final: dict[str, Any]
+    run_status = "ok"
     try:
         async with build_http_client(timeout=settings.collect_timeout_seconds) as client:
             engine.ctx = ToolContext(
@@ -117,11 +143,45 @@ async def run_graph(
     except Exception as exc:  # noqa: BLE001 — always return something usable
         logger.error("Graph execution failed",
                      f"{type(exc).__name__}: {exc}. Reporting on partial state.")
+        tracer.record_error(
+            component="graph", error_type="GRAPH_ERROR",
+            message=f"{type(exc).__name__}: {exc}", span_id=root_span,
+        )
+        run_status = "error"
         final = dict(initial)
         final["status"] = "failed"
         final["termination_reason"] = f"{type(exc).__name__}: {exc}"
 
-    return _assemble(final, engine, logger, started)
+    result = _assemble(final, engine, logger, started)
+
+    # Close the trace with the run's real metrics so the analyzer and the
+    # before/after comparison read the same numbers the dashboard shows.
+    try:
+        metrics = dict(result.get("metrics") or {})
+        tracer.end_span(
+            root_span,
+            status=run_status,
+            findings=metrics.get("findings_total", 0),
+            insights=metrics.get("insights", 0),
+            tool_calls=metrics.get("tool_calls", 0),
+        )
+        llm_usage = engine.host.llm.usage.to_dict() if engine.host.llm else {}
+        tracer.finish(
+            status=run_status,
+            metrics={**metrics, "llm_usage": llm_usage},
+            token_reason=(
+                engine.host.llm.disabled_reason
+                or engine.host.llm.last_error
+                or "the configured model provider did not report token usage"
+            ) if engine.host.llm else "",
+        )
+        result["trace_id"] = tracer.trace_id
+    except Exception:  # noqa: BLE001 — a trace must never break a run
+        pass
+    finally:
+        set_current_run("")
+
+    return result
 
 
 # ─────────────────────────────────────────────────────────────

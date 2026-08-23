@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from .api.agent import router as agent_router
 from .api.evaluation import router as evaluation_router
 from .api.graph import router as graph_router
+from .api.observability import router as observability_router
 from .api.report import router as report_router
 from .config import settings
 from .tools.registry import tool_registry
@@ -49,6 +50,7 @@ def create_app() -> FastAPI:
     app.include_router(graph_router)
     app.include_router(evaluation_router)
     app.include_router(report_router)
+    app.include_router(observability_router)
 
     @app.get("/health", tags=["ops"])
     async def health() -> JSONResponse:

@@ -402,12 +402,23 @@ backend/
 │   │   ├── governor.py        resource governor + loop/deadlock detection
 │   │   ├── adversarial.py     deterministic fault injection
 │   │   └── runner.py          entry point + SSE bridge + result projection
+│   ├── observability/         tracing & self-improvement (Task 7)
+│   │   ├── schemas.py         span/error/token/trace/diagnosis/plan types
+│   │   ├── tracer.py          span hierarchy via ContextVar, token accounting
+│   │   ├── instrument.py      node/tool/LLM wrappers (additive, never fails a run)
+│   │   ├── providers.py       local store (source of truth) + optional OTLP export
+│   │   ├── redaction.py       secret + prompt-content scrubbing at write time
+│   │   ├── controlled_failure.py  deterministic injection keyed to one run_id
+│   │   ├── analyzer.py        observations + evidence-weighted root-cause diagnosis
+│   │   ├── policy.py          versioned, bounded runtime OptimizationPolicy
+│   │   ├── improvement.py     propose/apply/revert + before-after acceptance
+│   │   └── loop.py            the 8-stage trace→diagnose→improve→verify cycle
 │   ├── tools/                 5 tools + shared signal detection
 │   ├── sources/               13 providers + retry/breaker/simulation
 │   ├── reports/               builder, HTML, PDF, Markdown
 │   └── services/              activity logger (per-agent, typed events)
 ├── static/                    dashboard (vanilla ES modules, no build step)
-└── tests/                     158 tests
+└── tests/                     199 tests
 ```
 
 **Stack:** Python 3.11+ (tested on 3.14) · FastAPI · LangGraph · httpx · ReportLab · vanilla ES modules + hand-rolled SVG
@@ -639,11 +650,207 @@ Modes: `demo`, `full`, `adversarial`, `single`, `repeated`, `scenario`.
 
 ---
 
+## 🔍 Advanced tracing & observability (Task 7)
+
+Tracing is only worth the effort if it changes something. This layer records every agent run in
+full detail, then closes the loop:
+
+```
+TRACE → UNDERSTAND WHAT FAILED → DIAGNOSE ROOT CAUSE → CHOOSE A SAFE IMPROVEMENT
+      → APPLY IT → RE-RUN THE SAME SCENARIO → MEASURE → VERIFY IT ACTUALLY IMPROVED
+```
+
+The system does not stop at "trace collected". It diagnoses, fixes, re-runs and then **proves or
+disproves** its own improvement — and rolls the change back when the evidence does not support it.
+
+### Why an internal tracer rather than LangSmith / Langfuse / OpenTelemetry
+
+| Option | Why not |
+|---|---|
+| **LangSmith / Langfuse** | The dashboard would live in a third-party product. The brief requires the *application* to explain its own failures, so the diagnosis and improvement loop must read traces the app owns. A vendor SDK also adds an account and network dependency to a demo that must run offline. |
+| **OpenTelemetry SDK** | The right answer at scale, but without a collector deployed it adds a dependency and no capability. Its *data model* is the good part, so that is what we borrowed. |
+
+The chosen design is a small internal tracer (`app/observability/`) with a **provider abstraction**,
+so the storage decision is not baked in:
+
+* `LocalTraceProvider` — always on, in-memory (40 traces) with a JSON mirror on disk. Source of
+  truth. Recorded **before** any export, so a failed export can never lose a trace.
+* `ExternalTraceProvider` — optional, OTLP-shaped, fire-and-forget. Enable it to mirror spans to a
+  collector, Langfuse or LangSmith gateway. If it fails the run is unaffected and the trace reports
+  `"external telemetry unavailable — local trace retained"`.
+
+Zero new dependencies were added.
+
+### Span hierarchy
+
+14 span kinds (`run`, `orchestrator`, `node`, `agent`, `decision`, `llm`, `tool`, `provider`,
+`retry`, `fallback`, `memory`, `evaluation`, `verification`, `synthesis`). Nesting uses a
+`ContextVar` stack, so parallel agents each keep their own branch instead of racing for a parent.
+A real recorded trace (36 spans, zero orphans):
+
+```
+[run] agent_run 1312ms
+  ├─ [node] understand 747ms
+  │    └─ [llm] llm:task_context 739ms  degraded → heuristic reasoner
+  ├─ [node] plan · decompose        [decision] resource_check · dispatch
+  ├─ [agent] research_agent 493ms
+  │    └─ [tool] research_search 482ms
+  │         ├─ [provider] arxiv               attempts=0    0ms   ok
+  │         ├─ [provider] openalex            attempts=0    0ms   ok
+  │         └─ [provider] semantic_scholar    attempts=2  481ms   error  backoff=480ms
+  ├─ [agent] competitive_agent 5ms → [tool] web_search → [provider] tavily
+  ├─ [node] observer · conflict_resolution   [decision] self_evaluator · replan
+  ├─ [synthesis] finalize
+  └─ [memory] memory_update 4ms
+```
+
+Each span carries timing, status, attributes and events. Errors are separate records with a
+category, component, HTTP status, retry count, recovery status and an `injected` flag.
+
+### What is measured, and what is honestly not
+
+Token usage is reported as **`measured`** or **`unavailable` with a reason**. A provider that
+reported nothing is never recorded as "0 tokens" — that would be a fabricated measurement. The same
+rule applies to cost. In the demo below the Gemini quota was exhausted, so the trace says so
+verbatim rather than inventing a number.
+
+Retry cost is measured, not estimated: the retry loop accumulates its real `asyncio.sleep` time into
+`retry_wait_ms`, so "480ms of backoff" is a reading, not a model.
+
+### Controlled failure
+
+A deterministic fault can be armed against any of the 13 registered providers
+(`rate_limit`, `timeout`, `server_error`, `bad_response`). It is **keyed to a single `run_id`**, so
+arming one cannot leak into a concurrent normal run. The injected error is a real
+`SourceError(status=429, retryable=True)` raised *inside* the production retry loop, so the retries,
+backoff, circuit breaker and fallback that follow are all genuine.
+
+### The improvement engine — configuration, never code
+
+Improvements change a **versioned runtime `OptimizationPolicy`**, clamped to declared bounds
+(`retry_attempts` 1–5, `timeout_seconds` 3–40). No source file is ever written — a test byte-compares
+`resilience.py`, `runner.py` and `policy.py` across a full propose → apply → revert cycle to prove it.
+Every version is reversible, and a rejected improvement is rolled back automatically.
+
+### Acceptance is a gate, not a formality
+
+A change is kept only when the targeted metric improves **and** no quality metric regresses. Quality
+is judged by the **Task 6 evaluators**, not by this module's own opinion. Verdicts:
+
+`IMPROVEMENT_VERIFIED` · `IMPROVEMENT_REJECTED` (quality regressed, errors rose, or task success
+fell → auto-revert) · `NO_MATERIAL_CHANGE` (below the noise floor: 50ms latency / 5% relative) ·
+`NOT_MEASURABLE` · `NO_SAFE_IMPROVEMENT` · `NO_DIAGNOSIS`
+
+Metric direction is **declared** per metric, never inferred from the sign of a difference.
+
+### Verified demo run
+
+Real output from `POST /api/observability/improve` (`cyc-1e9341489a`, simulation mode):
+
+| Stage | Result |
+|---|---|
+| Trace | 36 spans, 3 errors |
+| Understand | 3 errors, 1 provider with spent retries |
+| Diagnose | `EXCESSIVE_RETRY` on `semantic_scholar` — confidence **97%** |
+| Choose | `retry_attempts[semantic_scholar]` 2 → 1 |
+| Apply | runtime policy **v0 → v1** |
+| Re-run | same scenario, `tr-47dcf2aeef8147e7` |
+| Measure | scored by the Task 6 evaluators |
+| Verify | **accepted** — latency improved 984ms with no quality regression |
+
+Evidence behind the diagnosis (generated, not written by hand):
+
+> 2 rate-limit responses (HTTP 429) from semantic_scholar · the provider failed on 2 consecutive
+> attempts, so the retries did not recover it · 1 retry attempt beyond the first was spent across 1
+> failed call and still did not recover the provider · 480ms of that was backoff waiting between
+> attempts, measured from the retry loop · semantic_scholar accounted for 37% of total run time ·
+> every failure was classified retryable, so the retry policy governed the behaviour
+
+Measured before / after:
+
+| Metric | Before | After | |
+|---|---|---|---|
+| **duration_ms** (target) | 1312 | **328** | improved −984ms |
+| retries | 1 | 0 | improved |
+| findings | 29 | 30 | improved |
+| groundedness | 1.00 | 1.00 | held |
+| task_completion | 1.00 | 1.00 | held |
+| evidence_quality | 0.5897 | 0.5899 | held |
+| errors | 3 | 3 | unchanged |
+| Task 6 outcome | **PASS** | **PASS** | held |
+
+`errors` staying at 3 is the honest result: the provider is still rate-limited. The improvement
+removes the *wasted retry latency*, not the upstream 429s.
+
+**The diagnosis depends on what else went wrong in the run.** In the capture above the retry
+evidence dominated, so the verdict was `EXCESSIVE_RETRY` at 97% confidence. On a run where the
+Gemini quota was also exhausted, the same scenario reported:
+
+```
+root cause: MULTIPLE_POSSIBLE_CAUSES on semantic_scholar @ 60%
+latency   : 1098ms -> 334ms (-764ms)   Task 6: PASS -> PASS
+```
+
+That is the tie-break rule working, not a defect: two explanations (the rate limit and the model
+failure) fitted the evidence within 0.15 confidence of each other, so the analyzer refuses to
+present one as settled, caps confidence at 60% and flags `validation_required`. It still proposes the
+strongest candidate's fix and then *measures* whether it helped — which is the point of validating
+empirically rather than trusting the diagnosis.
+
+Running the cycle a second time correctly refuses to invent another change:
+
+```
+verdict: NO_SAFE_IMPROVEMENT
+choose  rejected  No change available: semantic_scholar already retries only 1 time(s),
+                  so there is no retry latency left to remove.
+```
+
+### Run it
+
+```bash
+# dashboard: Observability tab → 🔬 Run Improvement Cycle   (streams stage by stage)
+
+curl -X POST http://localhost:8000/api/observability/improve \
+  -H 'Content-Type: application/json' \
+  -d '{"target_source":"semantic_scholar","failure_type":"rate_limit","failure_count":2}'
+
+curl http://localhost:8000/api/observability/traces              # recent traces
+curl http://localhost:8000/api/observability/traces/{id}/tree    # hierarchical timeline
+curl http://localhost:8000/api/observability/root-cause/{id}     # diagnosis + evidence
+curl http://localhost:8000/api/observability/policy              # active policy + versions
+curl -X POST http://localhost:8000/api/observability/policy/reset # back to shipped defaults
+```
+
+17 endpoints under `/api/observability`, including an SSE stream at `/improve/stream`.
+
+### Configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `OBSERVABILITY_ENABLED` | `true` | Master switch. Off → runs execute untraced, unaffected. |
+| `TRACE_EXPORT_ENABLED` | `false` | Mirror spans to an external collector. |
+| `TRACE_EXPORT_ENDPOINT` | `""` | OTLP-shaped HTTP endpoint. |
+| `TRACE_EXPORT_API_KEY` | `""` | Sent as a bearer token. Never appears in a trace or in `/status`. |
+| `TRACE_PROJECT` | `insightpulse` | Project label attached to exported traces. |
+
+### Safety
+
+Every attribute passes a redaction filter at **write** time, so a secret never reaches memory in the
+first place. API keys, tokens and bearer credentials are replaced; prompt text, system prompts and
+chain-of-thought are reduced to `<omitted: N chars>` — the *shape* of a prompt is observable, its
+content is not. Instrumentation is wrapped so it can never fail a run: a broken span is counted in
+`instrumentation_failures` and the run continues.
+
+Normal mode is untouched. With no fault armed, a run records `optimization_version: 0`, zero
+injected errors, and produces exactly what it did before this task.
+
+---
+
 ## ✅ Test suite
 
 ```bash
 cd backend && .venv/bin/python -m pytest tests/ -q
-# 158 passed  (111 core + 19 LangGraph framework + 28 evaluation)
+# 199 passed  (111 core + 19 LangGraph framework + 28 evaluation + 41 observability)
 ```
 
 Covers goal→plan, dynamic tool selection per goal, observation-driven adaptation, self-termination,
@@ -680,7 +887,12 @@ unchanged.
 | Intelligence dashboard with derived analytics | ✅ |
 | Intelligence Report — PDF / HTML / Markdown / JSON | ✅ |
 | Source provenance auditing | ✅ |
-| 158 automated tests | ✅ |
+| End-to-end tracing — 14 span kinds, agent/decision/prompt/tool/token/error spans | ✅ |
+| Deterministic controlled failure through the real retry loop | ✅ |
+| Automatic root-cause diagnosis with evidence-weighted confidence | ✅ |
+| Versioned, reversible improvement engine (runtime config, never code rewrite) | ✅ |
+| Same-scenario re-run with Task 6 validated before/after and accept/reject | ✅ |
+| 199 automated tests | ✅ |
 | Public deployment | ❌ not yet — runs locally |
 | Scheduled autonomous re-runs | ❌ out of scope for the current tasks |
 | Multi-user accounts / persistence | ❌ runs are held in memory |

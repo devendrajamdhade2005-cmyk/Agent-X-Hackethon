@@ -194,6 +194,69 @@ export async function runEvaluationStream(payload, onEvent, signal) {
   return result;
 }
 
+/* ── Tracing & observability (Task 7) ───────────────────────── */
+export const getObservabilityStatus = () => getJSON("/api/observability/status");
+export const getTraces          = (limit = 20) => getJSON(`/api/observability/traces?limit=${limit}`);
+export const getTraceTree       = (id) => getJSON(`/api/observability/traces/${encodeURIComponent(id)}/tree`);
+export const getTraceErrors     = (limit = 10) => getJSON(`/api/observability/errors?limit=${limit}`);
+export const getTraceAnalysis   = (id) => getJSON(`/api/observability/analysis/${encodeURIComponent(id)}`);
+export const getTraceRootCause  = (id) => getJSON(`/api/observability/root-cause/${encodeURIComponent(id)}`);
+export const getOptimizationPolicy = () => getJSON("/api/observability/policy");
+export const getFailureTargets  = () => getJSON("/api/observability/failure-targets");
+export const getImprovementCycles = () => getJSON("/api/observability/cycles");
+
+async function postJSON(path, payload) {
+  const res = await fetch(apiUrl(path), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {}),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json();
+}
+
+export const resetOptimizationPolicy  = () => postJSON("/api/observability/policy/reset");
+export const revertOptimizationPolicy = () => postJSON("/api/observability/policy/revert");
+export const armControlledFailure     = (payload) => postJSON("/api/observability/controlled-failure", payload);
+
+/**
+ * Stream the full self-improvement cycle: trace → diagnose → improve → re-run →
+ * measure → verify. onEvent receives each stage event; resolves with the report.
+ */
+export async function runImprovementStream(payload, onEvent, signal) {
+  const res = await fetch(apiUrl("/api/observability/improve/stream"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  if (!res.ok || !res.body) throw new Error(await readError(res));
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let report = null;
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+    for (const frame of frames) {
+      const line = frame.split("\n").find((l) => l.startsWith("data:"));
+      if (!line) continue;
+      let event;
+      try { event = JSON.parse(line.slice(5).trim()); } catch { continue; }
+      if (event.type === "report") report = event.report;
+      if (event.type === "error") throw new Error(event.message || "improvement cycle error");
+      onEvent(event);
+    }
+  }
+  if (!report) throw new Error("the improvement cycle ended without producing a report");
+  return report;
+}
+
 export async function generateReport(runId, { force = false } = {}) {
   const res = await fetch(apiUrl("/api/report/generate"), {
     method: "POST",

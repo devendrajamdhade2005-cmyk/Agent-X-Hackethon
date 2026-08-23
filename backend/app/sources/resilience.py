@@ -171,6 +171,98 @@ class ResilienceRegistry:
 registry = ResilienceRegistry()
 
 
+# ─────────────────────────────────────────────────────────────
+# Task 7 observability seams
+#
+# Kept as small, defensive helpers so this module has no hard dependency on the
+# observability package: if it is absent or raises, collection behaves exactly as it
+# did before. Instrumentation must never be able to break data collection.
+# ─────────────────────────────────────────────────────────────
+def _injection_plan(source: str):
+    """The controlled-failure plan for the executing run, if one targets `source`."""
+    try:
+        from ..observability.controlled_failure import plan_for_current_run
+
+        plan = plan_for_current_run()
+        if plan is None or not plan.enabled or plan.target_source != source:
+            return None
+        return plan
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _policy_attempts(source: str, default: int) -> int:
+    """Attempt ceiling after the runtime optimization policy has its say."""
+    try:
+        from ..observability.policy import registry as policy_registry
+
+        return policy_registry.active.retry_attempts_for(source, default)
+    except Exception:  # noqa: BLE001
+        return default
+
+
+def _build_injected_error(plan) -> Exception:
+    from ..observability.controlled_failure import build_injected_error
+
+    return build_injected_error(plan)
+
+
+def _trace_injection(source: str, plan, *, attempt: int, fired: int) -> None:
+    """Record the injection on the active trace, if tracing is on."""
+    try:
+        from ..observability.tracer import current_trace
+
+        tracer = current_trace()
+        if tracer is None:
+            return
+        shape = plan.shape()
+        tracer.record_error(
+            component="source",
+            error_type=shape["category"],
+            message=shape["message"],
+            provider=source,
+            http_status=shape["status"],
+            retryable=bool(shape["retryable"]),
+            retry_count=attempt - 1,
+            injected=True,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _trace_provider_outcome(outcome: "CollectOutcome") -> None:
+    """Emit a provider span carrying the real attempt/latency/status detail."""
+    try:
+        from ..observability.tracer import current_trace
+
+        tracer = current_trace()
+        if tracer is None:
+            return
+        span_id = tracer.start_span(
+            f"provider:{outcome.source}", "provider",
+            provider=outcome.source,
+            source_type=outcome.source_type,
+            attempts=outcome.attempts,
+            result_count=len(outcome.items),
+            simulated=outcome.simulated,
+            skipped=outcome.skipped,
+            broadened=outcome.broadened,
+            note=outcome.note,
+        )
+        if outcome.attempts > 1:
+            for attempt in range(2, outcome.attempts + 1):
+                tracer.add_event(span_id, "retry_recorded", attempt=attempt)
+        tracer.end_span(
+            span_id,
+            status="ok" if outcome.ok else "error",
+            latency_ms=outcome.latency_ms,
+            retry_wait_ms=outcome.retry_wait_ms,
+            error_message=outcome.error or "",
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 @dataclass
 class CollectOutcome:
     """What COLLECT reports per source — success, degradation, or simulation."""
@@ -186,6 +278,9 @@ class CollectOutcome:
     latency_ms: int = 0
     note: str = ""
     broadened: bool = False
+    # Wall-clock time spent sleeping between retry attempts, measured. Additive
+    # field: existing consumers of CollectOutcome are unaffected.
+    retry_wait_ms: int = 0
 
 
 async def collect_from_source(
@@ -199,13 +294,40 @@ async def collect_from_source(
 
     This function never raises. Failure is data, not an exception, because the
     agent must always be able to finish the run with whatever it did get.
+
+    Thin wrapper so every exit path — the simulation short-circuit, the breaker
+    skip, the forced-failure hook and the retry loop — emits exactly one provider
+    span, without the tracing call being duplicated at five return sites.
     """
+    outcome = await _collect_from_source(
+        connector, client, query, simulation_mode=simulation_mode
+    )
+    _trace_provider_outcome(outcome)
+    return outcome
+
+
+async def _collect_from_source(
+    connector: SourceConnector,
+    client: Any,
+    query: SourceQuery,
+    *,
+    simulation_mode: bool = False,
+) -> CollectOutcome:
+    """The collection logic itself. See `collect_from_source`."""
     source = connector.name
     outcome = CollectOutcome(source=source, source_type=connector.source_type)
     breaker = registry.breaker(source)
 
+    # 0. Controlled-failure injection (Task 7 observability).
+    #
+    # Checked before the simulation short-circuit so the injected failure reaches the
+    # *real* retry loop below: the attempt ceiling, jittered backoff, breaker and the
+    # tool's provider-level fallback are all production code. Only the trigger is
+    # synthetic. Scoped to one run id, so a normal run in flight is untouched.
+    injection = _injection_plan(source)
+
     # 1. Offline / no-credential path → deterministic synthetic items.
-    if simulation_mode or not connector.available():
+    if (simulation_mode or not connector.available()) and injection is None:
         outcome.items = [i.clean() for i in connector.simulate(query)]
         outcome.simulated = True
         outcome.note = (
@@ -241,7 +363,12 @@ async def collect_from_source(
     # so a tool costs its slowest provider: one source that answers 429 twice
     # before succeeding holds up every other source in the same call. Retrying it
     # fewer times trades a little of its coverage for the whole tool's latency.
-    max_attempts = getattr(connector, "max_attempts", None) or MAX_ATTEMPTS
+    # The attempt ceiling is a *policy* decision. The connector may lower its own,
+    # and the runtime optimization policy (Task 7) may lower it further for a
+    # specific source — which is how the improvement engine turns "retry less on a
+    # rate-limited provider" into a configuration change rather than a code edit.
+    default_attempts = getattr(connector, "max_attempts", None) or MAX_ATTEMPTS
+    max_attempts = _policy_attempts(source, default_attempts)
     bucket = registry.bucket(source, connector.rate_limit_per_min)
     started = time.perf_counter()
     last_error = ""
@@ -249,10 +376,25 @@ async def collect_from_source(
         outcome.attempts = attempt
         try:
             await bucket.acquire()
-            items = await asyncio.wait_for(
-                connector.fetch(client, query),
-                timeout=connector.timeout_seconds + 3.0,
-            )
+            if injection is not None and injection.should_fail(source):
+                # Deterministic controlled failure. Raised inside the real loop so
+                # retry/backoff/breaker behaviour is genuine.
+                fired = injection.record_fired(source)
+                _trace_injection(source, injection, attempt=attempt, fired=fired)
+                raise _build_injected_error(injection)
+            if injection is not None and (simulation_mode or not connector.available()):
+                # The injected failures are spent. This source has no live credential
+                # (or the run is offline), so recovery resolves to the same
+                # deterministic fixtures the normal simulation path serves — the
+                # retry loop having genuinely run to this attempt.
+                items = [i.clean() for i in connector.simulate(query)]
+                outcome.simulated = True
+                outcome.note = "recovered after controlled failure (simulated fixture)"
+            else:
+                items = await asyncio.wait_for(
+                    connector.fetch(client, query),
+                    timeout=connector.timeout_seconds + 3.0,
+                )
 
             # A precise query returning nothing is a signal, not a dead end:
             # widen once and say so, rather than reporting an empty feed.
@@ -290,7 +432,12 @@ async def collect_from_source(
             sleep_hint = None
         if attempt < max_attempts:
             backoff = BASE_BACKOFF * (2 ** (attempt - 1)) + random.uniform(0, 0.25)
-            await asyncio.sleep(sleep_hint or backoff)
+            slept = sleep_hint or backoff
+            # Accumulate the real time spent waiting between attempts. This is the
+            # cost a retry-policy change actually removes, so it is measured here
+            # rather than estimated later.
+            outcome.retry_wait_ms += int(slept * 1000)
+            await asyncio.sleep(slept)
 
     latency = int((time.perf_counter() - started) * 1000)
     state = registry.record_failure(source, last_error, latency)

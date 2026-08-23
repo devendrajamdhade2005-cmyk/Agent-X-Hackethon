@@ -28,6 +28,9 @@ from typing import Any
 
 from ..config import settings
 from ..memory import MemoryManager
+from ..observability.controlled_failure import set_current_run
+from ..observability.policy import registry as policy_registry
+from ..observability.tracer import current_trace, get_tracer, reset_span_stack
 from ..services.activity_logger import ActivityEntry, ActivityLogger
 from ..sources.registry import build_http_client, registry as source_registry
 from ..tools.base import ToolContext, ToolInput, ToolResult
@@ -147,6 +150,28 @@ class InsightPulseAgent:
             return self._result(started)
 
         self.logger.start(state.user_goal, run_id=state.run_id)
+
+        # ── observability: trace this run too ──
+        # The LangGraph runtime is the primary path, but this classic loop is still
+        # reachable from the dashboard's scan button, so it gets the same treatment:
+        # one root span per run, with the tool, provider and LLM spans underneath.
+        tracer = None
+        root_span = ""
+        try:
+            reset_span_stack()
+            tracer = get_tracer(
+                run_id=state.run_id, goal=state.user_goal,
+                scenario="normal", root_operation="agent_run",
+                optimization_version=policy_registry.version,
+            )
+            set_current_run(state.run_id)
+            root_span = tracer.start_span(
+                "agent_run", "run", runtime="classic",
+                goal_chars=len(state.user_goal), simulation_mode=self.simulation_mode,
+            )
+        except Exception:  # noqa: BLE001 — tracing must never block a run
+            tracer = None
+
         await self._check_reasoner()
 
         try:
@@ -176,7 +201,27 @@ class InsightPulseAgent:
             except Exception:  # noqa: BLE001
                 state.status = "failed"
 
-        return self._result(started)
+        result = self._result(started)
+        if tracer is not None:
+            try:
+                metrics = dict(result.metrics or {})
+                tracer.end_span(
+                    root_span,
+                    status="ok" if state.status != "failed" else "error",
+                    findings=metrics.get("findings_total", 0),
+                    insights=metrics.get("insights", 0),
+                )
+                tracer.finish(
+                    status="ok" if state.status != "failed" else "error",
+                    metrics=metrics,
+                    token_reason=(self.llm.disabled_reason or self.llm.last_error
+                                  or "the configured model provider did not report token usage"),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            finally:
+                set_current_run("")
+        return result
 
     async def _check_reasoner(self) -> None:
         """Confirm the LLM credential before planning, and report what we got.
@@ -488,8 +533,53 @@ class InsightPulseAgent:
         )
 
         state.call_signatures.add(decision.tool_input.signature(decision.tool))
-        result = await tool.run(decision.tool_input, ctx)
+        result = await self._run_tool_traced(tool, decision, ctx, iteration)
         state.absorb_result(result)
+        return result
+
+    async def _run_tool_traced(
+        self, tool: Any, decision: Decision, ctx: ToolContext, iteration: int
+    ) -> ToolResult:
+        """Execute a tool inside a span so its providers nest underneath it.
+
+        Separated from `_call_tool` so `GraphHost` — which overrides `_call_tool` and
+        is traced by its own decorator — is unaffected.
+        """
+        tracer = current_trace()
+        if tracer is None or not tracer.enabled:
+            return await tool.run(decision.tool_input, ctx)
+
+        span_id = tracer.start_span(
+            tool.name, "tool", tool=tool.name,
+            query=getattr(decision.tool_input, "query", ""), iteration=iteration,
+        )
+        try:
+            result = await tool.run(decision.tool_input, ctx)
+        except Exception as exc:  # noqa: BLE001
+            tracer.record_error(
+                component=f"tool:{tool.name}", error_type="TOOL_ERROR",
+                message=f"{type(exc).__name__}: {exc}", tool=tool.name, span_id=span_id,
+            )
+            tracer.end_span(span_id, status="error", error=type(exc).__name__)
+            raise
+        try:
+            failed = [
+                str(p.get("provider", "")) for p in (result.providers_failed or [])
+                if isinstance(p, dict)
+            ]
+            tracer.end_span(
+                span_id, status=("ok" if result.count else "degraded"),
+                result_count=result.count, latency_ms=result.latency_ms,
+                providers_used=",".join(result.providers_used or []),
+                providers_failed=",".join(p for p in failed if p),
+                simulated=bool(result.simulated),
+            )
+        except Exception:  # noqa: BLE001
+            tracer.instrumentation_failures += 1
+            try:
+                tracer.end_span(span_id, status="ok")
+            except Exception:  # noqa: BLE001
+                pass
         return result
 
     # ── 6-7. OBSERVE + ANALYZE ──────────────────────────────

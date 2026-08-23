@@ -30,6 +30,7 @@ from typing import Any
 import httpx
 
 from ..config import settings
+from ..observability.instrument import traced_llm_call
 
 # Rough blended $/1M tokens for the run cost estimate shown in the UI.
 _PRICES: dict[str, tuple[float, float]] = {
@@ -586,6 +587,7 @@ class LLMClient:
         return False, reason
 
     # ── generation ──────────────────────────────────────────
+    @traced_llm_call
     async def complete_json(
         self,
         *,

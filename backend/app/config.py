@@ -82,6 +82,16 @@ class Settings(BaseSettings):
     smtp_from: str = "insightpulse@localhost"
     smtp_starttls: bool = True
 
+    # ── observability (Task 7) ──────────────────────────────
+    # Local tracing is on by default and has no external dependency. Export is
+    # opt-in: without an endpoint the exporter stays inert and the local trace is
+    # the only sink, which is what keeps the project free of vendor lock-in.
+    observability_enabled: bool = True
+    trace_export_enabled: bool = False
+    trace_export_endpoint: str = ""
+    trace_export_api_key: str = ""
+    trace_project: str = "insightpulse"
+
     # ── api access ──────────────────────────────────────────
     # Empty = open (local demo). Set this before exposing the service publicly:
     # /api/agent/run spends LLM quota and makes outbound requests on demand.

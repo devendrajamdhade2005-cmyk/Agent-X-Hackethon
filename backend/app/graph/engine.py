@@ -23,6 +23,7 @@ from typing import Any
 from ..agents.agent import InsightPulseAgent
 from ..agents.state import AgentState, Decision
 from ..memory import MemoryManager
+from ..observability.instrument import traced_tool_call
 from ..services.activity_logger import ActivityLogger, Phase
 from ..sources.resilience import registry as resilience_registry
 from ..tools.base import ToolContext, ToolInput, ToolResult
@@ -164,6 +165,7 @@ class GraphHost(InsightPulseAgent):
         self.injected_events: list[dict[str, Any]] = []
 
     # ── the one real override ───────────────────────────────
+    @traced_tool_call
     async def _call_tool(self, decision: Decision, ctx: ToolContext, iteration: int) -> ToolResult:
         tool_name = decision.tool or ""
         fault = self.engine.adversarial.fault_for(tool_name)

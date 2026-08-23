@@ -22,9 +22,10 @@ import { renderMultiAgent } from "./agent/multiagent.js";
 import { renderMemory } from "./agent/memory.js";
 import { initFramework } from "./agent/framework.js";
 import { initEvaluation } from "./agent/evaluation.js";
+import { initObservability } from "./agent/observability.js";
 import { closeDrawer, openDrawer } from "./drawers/detailDrawer.js";
 
-const VIEWS = ["overview", "research", "competitors", "patents", "news", "insights", "framework", "evaluation", "reports"];
+const VIEWS = ["overview", "research", "competitors", "patents", "news", "insights", "framework", "evaluation", "observability", "reports"];
 const rendered = new Set();
 let controller = null;
 let trackerIndex = -1;
@@ -220,6 +221,12 @@ function switchView(view) {
   if (view === "evaluation") {
     show($("dash"), true);
     initEvaluation($("evaluation-body"));
+  }
+  // Observability reads recorded traces and drives its own improvement cycles, so
+  // it is self-driving too and must work before any classic scan has happened.
+  if (view === "observability") {
+    show($("dash"), true);
+    initObservability($("observability-body"));
   }
 
   renderView(view);
