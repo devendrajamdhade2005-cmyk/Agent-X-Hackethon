@@ -186,7 +186,21 @@ function applyTransition(fw, e) {
       break;
     case "agent_started": {
       const a = e.data.agent;
-      if (a && AGENT_NODES.has(a)) set(a, statuses[a] === "running" ? "completed" : "running");
+      if (!a || !AGENT_NODES.has(a)) break;
+      // The backend emits this event twice per agent: on start (payload carries
+      // `tools`/`kind`) and on completion (payload carries the report's `status`/
+      // `coverage`). Distinguish by payload rather than by inferring from the node's
+      // current state — a tool failure sets the node to `recovered` in between, which
+      // used to make the completion event read as a *start* and leave the agent
+      // showing "running" for the rest of the run.
+      const isCompletion = e.data.status !== undefined || e.data.coverage !== undefined;
+      if (isCompletion) {
+        // Keep `recovered` — it is a terminal state too, and more informative than
+        // plain completion because it records that the agent hit a failure and got past it.
+        set(a, statuses[a] === "recovered" ? "recovered" : "completed");
+      } else if (statuses[a] !== "completed" && statuses[a] !== "recovered") {
+        set(a, "running");
+      }
       break;
     }
     case "tool_failed": case "tool_timeout": { const a = e.data.agent; if (a) set(a, "recovered"); break; }
@@ -202,7 +216,13 @@ function applyTransition(fw, e) {
     case "memory_updated": set("memory_update", "completed"); break;
     case "run_completed":
       set("finalize", "completed"); set("memory_update", "completed");
-      for (const [id] of NODES) if (statuses[id] === "pending") statuses[id] = "skipped";
+      for (const [id] of NODES) {
+        if (statuses[id] === "pending") statuses[id] = "skipped";
+        // Once the run is over nothing can still be in flight. Settling any leftover
+        // `running` node guarantees the diagram never contradicts the report, even if
+        // a future node or event is added without a matching transition above.
+        else if (statuses[id] === "running") statuses[id] = "completed";
+      }
       break;
     default: break;
   }
