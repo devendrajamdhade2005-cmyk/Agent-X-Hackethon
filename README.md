@@ -8,11 +8,11 @@
 
 ## 👥 Team Members
 
-Team Leader - Devendra Jamdhade
-Member 1 - Akash Pingale
-Member 2 - Shubham Paithankar
-Member 3 - Gaurav Bodkhe
-Member 4 - Shubham Sonwane
+-Team Leader - Devendra Jamdhade
+-Member 1 - Akash Pingale
+-Member 2 - Shubham Paithankar
+-Member 3 - Gaurav Bodkhe
+-Member 4 - Shubham Sonwane
 
 ---
 
