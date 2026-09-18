@@ -11,8 +11,31 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "data"
-EXPORT_DIR = BASE_DIR / "exports"
+
+
+def _writable_dir(env_var: str, default: Path) -> Path:
+    """Resolve a writable directory, overridable by environment.
+
+    The default is derived from this file's location, so it is already portable —
+    nothing here depends on a developer's machine. The override exists for platform
+    hosts: a container filesystem is ephemeral, so on Railway these can be pointed
+    at a mounted volume (e.g. DATA_DIR=/data) to survive a redeploy. If the target
+    cannot be created the default is used rather than failing to boot, because
+    losing persistence is recoverable and refusing to start is not.
+    """
+    raw = (os.getenv(env_var) or "").strip()
+    if raw:
+        try:
+            candidate = Path(raw).expanduser()
+            candidate.mkdir(parents=True, exist_ok=True)
+            return candidate.resolve()
+        except Exception:  # noqa: BLE001 — fall back rather than crash on boot
+            pass
+    return default
+
+
+DATA_DIR = _writable_dir("DATA_DIR", BASE_DIR / "data")
+EXPORT_DIR = _writable_dir("EXPORT_DIR", BASE_DIR / "exports")
 
 
 class Settings(BaseSettings):

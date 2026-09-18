@@ -12,7 +12,14 @@ venv/
 .env
 .env.local
 *.env
+# `*.env` only matches names ENDING in .env, so a backup or variant like
+# `.env.bak.1789747496`, `.env.save` or `.env.production` slipped through and could
+# be committed with live keys in it. Match anything that starts with .env instead,
+# then re-allow the placeholder template.
+.env.*
 !.env.example
+# Editor/OS noise that has been committed here before
+.DS_Store
 
 # Data
 *.db

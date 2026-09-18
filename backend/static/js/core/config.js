@@ -5,19 +5,24 @@
  *
  * How the base URL is resolved (first match wins):
  *   1. window.__API_BASE__            explicit runtime override (console/inline script)
- *   2. <meta name="api-base" content> optional static override in index.html
- *   3. localhost / 127.0.0.1          same-origin — the local FastAPI dev server
- *   4. anything else (e.g. Vercel)    PRODUCTION_API_BASE below
+ *   2. <meta name="api-base" content> static override in index.html
+ *   3. same-origin ("")               whatever host served this page
  *
- * Local development: served by FastAPI at http://localhost:8000, so the hostname
- * is localhost and API_BASE is "" (same-origin). Nothing to configure.
+ * No host is hardcoded. Same-origin is the default because the usual deployment is
+ * one service: FastAPI serves this page *and* the API, which is true both locally
+ * and on a platform host like Railway. In that arrangement there is nothing to
+ * configure — the UI simply calls the host it was loaded from, so the same build
+ * works on localhost, a preview URL and production without an edit.
  *
- * Production: the static frontend is hosted on Vercel (a different origin), so it
- * targets the Render backend below. The backend URL is public, not a secret — no
- * API keys are ever placed in frontend code.
+ * The override exists for split hosting, where the static frontend lives on a
+ * different origin from the API (e.g. a CDN or Vercel front end pointed at a
+ * Railway backend). Set the meta tag in index.html to the API origin:
+ *
+ *     <meta name="api-base" content="https://your-app.up.railway.app" />
+ *
+ * A backend origin is public information, not a secret. No API key is ever placed
+ * in frontend code — every credential stays server-side in the backend settings.
  */
-
-const PRODUCTION_API_BASE = "https://insightpulse-ai-agent.onrender.com";
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"]);
 
@@ -35,13 +40,17 @@ function resolveApiBase() {
     }
   }
 
+  // Same-origin. Correct for the single-service deployment and for local dev, and
+  // it keeps the deployed host out of the source entirely.
+  return "";
+}
+
+/** True when the page is being served from a local dev host. */
+export const IS_LOCAL_HOST = (() => {
   const host =
     typeof location !== "undefined" && location.hostname ? location.hostname : "";
-  if (LOCAL_HOSTS.has(host)) {
-    return ""; // same-origin: hit whatever served this page (local FastAPI)
-  }
-  return PRODUCTION_API_BASE;
-}
+  return LOCAL_HOSTS.has(host);
+})();
 
 /** Configured backend origin. "" means same-origin (local dev). */
 export const API_BASE = resolveApiBase();

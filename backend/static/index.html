@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>InsightPulse AI — Research &amp; Competitive Intelligence</title>
 <meta name="description" content="Autonomous research and competitor intelligence agent." />
+<!-- Backend API origin. Leave empty for the normal single-service deployment, where
+     FastAPI serves this page and the API together (localhost and Railway both work
+     with no change). Set it only for split hosting, when the frontend is served from
+     a different origin than the API:
+       <meta name="api-base" content="https://your-app.up.railway.app" />
+     This is a public origin, never a credential. -->
+<meta name="api-base" content="" />
 <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
