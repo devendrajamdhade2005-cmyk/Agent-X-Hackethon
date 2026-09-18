@@ -11,9 +11,13 @@ so there is no separate frontend to host and no CORS or API-URL wiring to do.
 
 2. In Railway: **New Project → Deploy from GitHub repo**, and select this repository.
 
-3. Railway reads [`railway.json`](./railway.json) from the repo root and uses the
-   build and start commands there. Nixpacks detects Python and installs
-   `backend/requirements.txt`. No Dockerfile is needed.
+3. **Set the Root Directory to `/backend`** under *Service → Settings → Source*.
+   Railway then builds from that folder, auto-detects Python, and installs
+   `requirements.txt` on its own. No build command and no Dockerfile are needed.
+
+   > `railway.json` stays at the **repo root**. Per Railway's docs the config file
+   > path is absolute from the repository root and does *not* follow the Root
+   > Directory setting — only the build and start commands run inside `/backend`.
 
 4. **Add the environment variables** (next section) under
    *Service → Variables*. The app boots with none of them set — it falls back to its
@@ -90,12 +94,16 @@ dashboard, not in a file.
 From [`railway.json`](./railway.json):
 
 ```bash
-cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
 ```
 
+- No `cd` prefix: the Root Directory is `/backend`, so the command already runs
+  there and `app.main:app` resolves directly.
 - `0.0.0.0` is required — binding `localhost` makes the container unreachable to
   Railway's router and the healthcheck fails.
-- `$PORT` is assigned by Railway at runtime.
+- `$PORT` is assigned by Railway at runtime. The `${PORT:-8000}` form means the
+  service still starts if the variable is ever absent, instead of dying on
+  `Option '--port' requires an argument`.
 - `python main.py` also works and reads `$PORT` the same way, if you prefer it.
 
 `numReplicas` is pinned to **1** deliberately: run history, traces, the rate limiter
