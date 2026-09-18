@@ -8,10 +8,10 @@
 ## 👥 Team Members
 
 - **Team Leader:** Devendra Jamdhade
-- **Member:** Akash Pingale
-- **Member:** Shubham Paithankar
-- **Member:** Gaurav Bodkhe
-- **Member:** Shubham Sonwane
+- **Member:** Sanika Dighe
+- **Member:** Prachi Bhujbal
+- **Member:** Shruti Sadgir
+- **Member:** Snehal Ranade
 ---
 
 ## 📌 Problem Statement
